@@ -1,3 +1,26 @@
+# Codex TUI for illumos
+
+> [!IMPORTANT]
+> This is an unofficial, experimental port of the Codex terminal UI. It is not
+> an OpenAI-supported illumos or Solaris release.
+
+This fork adds an SSH-oriented standalone Codex TUI build for 64-bit x86
+illumos systems. The current port was cross-compiled from macOS and verified
+on OmniOS r151058 using a self-hosted OpenAI Responses-compatible model
+gateway.
+
+- [Build, deploy, and configure the illumos port](scripts/solaris/README.md)
+- [Review the Rust and dependency changes](scripts/solaris/PORTING_NOTES.md)
+- [Run the core feature test matrix](scripts/solaris/CORE_FEATURE_TEST.md)
+- [Check source and artifacts before publishing](scripts/solaris/PUBLISHING.md)
+
+The port preserves the interactive TUI, shell and file tools, `apply_patch`,
+session resume, approvals, and gateway-provided web search. Native Codex
+sandboxing, desktop browser launch, image clipboard integration, Sentry
+feedback upload, Amazon Bedrock, and IDE IPC are not supported on illumos.
+
+---
+
 <p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
 <p align="center">
   <img src="https://github.com/openai/codex/blob/main/.github/codex-cli-splash.png" alt="Codex CLI splash" width="80%" />
