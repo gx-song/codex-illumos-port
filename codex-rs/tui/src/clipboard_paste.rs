@@ -1,5 +1,6 @@
 use std::path::Path;
 use std::path::PathBuf;
+#[cfg(not(any(target_os = "android", target_os = "illumos", target_os = "solaris")))]
 use tempfile::Builder;
 
 #[derive(Debug, Clone)]
@@ -47,7 +48,7 @@ pub struct PastedImageInfo {
 }
 
 /// Capture image from system clipboard, encode to PNG, and return bytes + info.
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "illumos", target_os = "solaris")))]
 pub fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageError> {
     let _span = tracing::debug_span!("paste_image_as_png").entered();
     tracing::debug!("attempting clipboard image read");
@@ -108,16 +109,14 @@ pub fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageErro
     ))
 }
 
-/// Android/Termux does not support arboard; return a clear error.
-#[cfg(target_os = "android")]
+/// Android/Termux, illumos, and Solaris do not support arboard; return a clear error.
+#[cfg(any(target_os = "android", target_os = "illumos", target_os = "solaris"))]
 pub fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageError> {
-    Err(PasteImageError::ClipboardUnavailable(
-        "clipboard image paste is unsupported on Android".into(),
-    ))
+    Err(unsupported_image_paste_error())
 }
 
 /// Convenience: write to a temp file and return its path + info.
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "illumos", target_os = "solaris")))]
 pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImageError> {
     // First attempt: read image from system clipboard via arboard (native paths or image data).
     match paste_image_as_png() {
@@ -228,11 +227,20 @@ fn try_dump_windows_clipboard_image() -> Option<String> {
     None
 }
 
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", target_os = "illumos", target_os = "solaris"))]
 pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImageError> {
     // Keep error consistent with paste_image_as_png.
-    Err(PasteImageError::ClipboardUnavailable(
-        "clipboard image paste is unsupported on Android".into(),
+    Err(unsupported_image_paste_error())
+}
+
+#[cfg(any(target_os = "android", target_os = "illumos", target_os = "solaris"))]
+fn unsupported_image_paste_error() -> PasteImageError {
+    #[cfg(target_os = "android")]
+    let platform = "Android";
+    #[cfg(any(target_os = "illumos", target_os = "solaris"))]
+    let platform = "Solaris";
+    PasteImageError::ClipboardUnavailable(format!(
+        "clipboard image paste is unsupported on {platform}"
     ))
 }
 

@@ -238,7 +238,11 @@ fn is_wsl_session() -> bool {
 /// triggers `os_log` / `NSLog` output on stderr. Because the TUI owns the
 /// terminal, that stray output corrupts the display. We temporarily redirect
 /// fd 2 to `/dev/null` around the call to keep the screen clean.
-#[cfg(not(target_os = "android"))]
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "illumos"),
+    not(target_os = "solaris")
+))]
 fn arboard_copy(text: &str, html: Option<&str>) -> Result<Option<ClipboardLease>, String> {
     #[cfg(target_os = "macos")]
     let _stderr_lock = STDERR_SUPPRESSION_MUTEX
@@ -269,6 +273,11 @@ fn arboard_copy(text: &str, html: Option<&str>) -> Result<Option<ClipboardLease>
 #[cfg(target_os = "android")]
 fn arboard_copy(_text: &str, _html: Option<&str>) -> Result<Option<ClipboardLease>, String> {
     Err("native clipboard unavailable on Android".to_string())
+}
+
+#[cfg(any(target_os = "illumos", target_os = "solaris"))]
+fn arboard_copy(_text: &str, _html: Option<&str>) -> Result<Option<ClipboardLease>, String> {
+    Err("native clipboard unavailable on illumos and Solaris".to_string())
 }
 
 /// Copy text into the Windows clipboard from a WSL process.
