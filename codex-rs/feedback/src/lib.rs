@@ -1,14 +1,18 @@
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
+#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 use std::collections::btree_map::Entry;
+#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 use std::fs;
 use std::io::Read;
 use std::io::Write;
 use std::io::{self};
+#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
+#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 use std::time::Duration;
 use std::time::Instant;
 
@@ -50,8 +54,10 @@ pub const CODEX_APP_DIRECTORY_CACHE_ATTACHMENT_FILENAME: &str = "codex-app-direc
 /// Filename used for the Windows sandbox log feedback attachment.
 pub const WINDOWS_SANDBOX_LOG_ATTACHMENT_FILENAME: &str = "windows-sandbox.log";
 const DEFAULT_MAX_BYTES: usize = 4 * 1024 * 1024; // 4 MiB
+#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 const SENTRY_DSN: &str =
     "https://ae32ed50620d7a7792c1ce5df38b3e3e@o33249.ingest.us.sentry.io/4510195390611458";
+#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 const UPLOAD_TIMEOUT_SECS: u64 = 10;
 // Raw collection budgets used by the report API, not the interactive upload.
 pub const MAX_ATTACHMENT_BYTES: usize = 64 * 1024 * 1024;
@@ -544,6 +550,7 @@ impl FeedbackSnapshot {
     }
 
     /// Upload feedback to Sentry with optional attachments.
+    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
     pub async fn upload_feedback(
         &self,
         options: FeedbackUploadOptions<'_>,
@@ -553,6 +560,7 @@ impl FeedbackSnapshot {
             .await
     }
 
+    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
     async fn upload_feedback_with_dsn(
         &self,
         options: FeedbackUploadOptions<'_>,
@@ -656,6 +664,19 @@ impl FeedbackSnapshot {
         Ok(())
     }
 
+    #[cfg(any(target_os = "illumos", target_os = "solaris"))]
+    pub async fn upload_feedback(
+        &self,
+        options: FeedbackUploadOptions<'_>,
+        _http_client_factory: &HttpClientFactory,
+    ) -> Result<()> {
+        let _ = options;
+        Err(anyhow!(
+            "feedback upload is unsupported on illumos and Solaris"
+        ))
+    }
+
+    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
     fn upload_tags(
         &self,
         classification: &str,
@@ -705,6 +726,7 @@ impl FeedbackSnapshot {
         tags
     }
 
+    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
     fn feedback_attachments<'a>(
         &'a self,
         include_logs: bool,
@@ -765,6 +787,7 @@ impl FeedbackSnapshot {
     }
 }
 
+#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 fn display_classification(classification: &str) -> String {
     match classification {
         "bug" => "Bug".to_string(),
@@ -967,6 +990,7 @@ mod tests {
             .await
     }
 
+    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
     #[tokio::test]
     async fn feedback_upload_retries_diagnostics_without_replaying_core() {
         let server = MockServer::start().await;
@@ -1222,6 +1246,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
     #[tokio::test]
     async fn feedback_upload_reports_rejected_sentry_response_without_exposing_feedback() {
         let server = MockServer::start().await;
@@ -1244,6 +1269,7 @@ mod tests {
         assert!(!error.contains("private feedback"));
     }
 
+    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
     #[tokio::test]
     async fn feedback_upload_does_not_forward_private_data_to_redirect_target() {
         let sentry_server = MockServer::start().await;
@@ -1272,6 +1298,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
     #[tokio::test]
     async fn feedback_upload_reports_transport_failures() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0")
@@ -1294,6 +1321,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
     fn feedback_attachments_gate_connectivity_diagnostics() {
         let extra_filename = format!("codex-feedback-extra-{}.jsonl", ThreadId::new());
         let extra_path = std::env::temp_dir().join(&extra_filename);
@@ -1372,6 +1400,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
     fn path_backed_attachments_use_binary_content_types() {
         let suffix = ThreadId::new();
         let gzip_filename = format!("codex-desktop-app-logs-{suffix}.tar.gz");
@@ -1429,6 +1458,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
     fn upload_tags_include_client_tags_and_preserve_reserved_fields() {
         let mut tags = BTreeMap::new();
         tags.insert("thread_id".to_string(), "wrong-thread".to_string());

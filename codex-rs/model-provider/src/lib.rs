@@ -1,3 +1,4 @@
+#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 mod amazon_bedrock;
 mod auth;
 mod bearer_auth_provider;
@@ -5,6 +6,7 @@ mod models_endpoint;
 mod provider;
 mod shared_state;
 
+#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 pub use amazon_bedrock::is_supported_amazon_bedrock_region;
 pub use auth::AgentIdentitySessionFallback;
 pub use auth::ProviderAuthScope;
@@ -29,3 +31,9 @@ pub use provider::ProviderUnauthorizedRecovery;
 pub use provider::RemoteCompactionSupport;
 pub use provider::SharedModelProvider;
 pub use provider::create_model_provider;
+
+/// Returns whether Amazon Bedrock is available in `region`.
+#[cfg(any(target_os = "illumos", target_os = "solaris"))]
+pub fn is_supported_amazon_bedrock_region(_region: &str) -> bool {
+    false
+}
