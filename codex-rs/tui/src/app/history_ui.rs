@@ -67,7 +67,7 @@ impl App {
     }
 
     pub(super) fn open_url_in_browser(&mut self, url: String) {
-        if let Err(err) = webbrowser::open(&url) {
+        if let Err(err) = open_url(&url) {
             self.chat_widget
                 .add_error_message(format!("Failed to open browser for {url}: {err}"));
             return;
@@ -175,6 +175,16 @@ impl App {
         self.backtrack_render_pending = false;
         self.skill_load_warnings.clear();
     }
+}
+
+#[cfg(any(target_os = "illumos", target_os = "solaris"))]
+fn open_url(_url: &str) -> Result<(), String> {
+    Err("browser launching is unsupported on illumos and Solaris".to_string())
+}
+
+#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
+fn open_url(url: &str) -> Result<(), String> {
+    webbrowser::open(url).map_err(|err| err.to_string())
 }
 
 fn desktop_thread_open_error_message(err: &str) -> String {

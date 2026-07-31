@@ -8,6 +8,11 @@ use winapi_util::sysinfo::ComputerNameKind;
 #[cfg(windows)]
 use winapi_util::sysinfo::get_computer_name;
 
+#[cfg(any(target_os = "illumos", target_os = "solaris"))]
+const AI_CANONNAME: i32 = 0x0010;
+#[cfg(all(unix, not(any(target_os = "illumos", target_os = "solaris"))))]
+const AI_CANONNAME: i32 = libc::AI_CANONNAME;
+
 static HOST_NAME: LazyLock<Option<String>> = LazyLock::new(compute_host_name);
 
 /// Returns a process-cached canonical hostname, falling back to the normalized
@@ -41,7 +46,7 @@ fn normalize_host_name(hostname: &str) -> Option<String> {
 #[cfg(unix)]
 fn local_fqdn_for_hostname(hostname: &str) -> Option<String> {
     let hints = AddrInfoHints {
-        flags: libc::AI_CANONNAME,
+        flags: AI_CANONNAME,
         ..AddrInfoHints::default()
     };
 

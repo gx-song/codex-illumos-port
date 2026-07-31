@@ -128,6 +128,26 @@ pub async fn perform_oauth_login_silent(
     callback_url: Option<&str>,
     http_client: Arc<dyn HttpClient>,
 ) -> Result<()> {
+    #[cfg(any(target_os = "illumos", target_os = "solaris"))]
+    {
+        let _ = (
+            server_name,
+            server_url,
+            store_mode,
+            keyring_backend_kind,
+            http_headers,
+            env_http_headers,
+            scopes,
+            oauth_client_id,
+            oauth_resource,
+            callback_port,
+            callback_url,
+            http_client,
+        );
+        bail!("silent MCP OAuth login is unsupported on illumos and Solaris");
+    }
+
+    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
     perform_oauth_login_with_browser_output(
         server_name,
         server_url,
@@ -564,6 +584,7 @@ impl OauthLoginFlow {
                 );
             }
 
+            #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
             if webbrowser::open(auth_url).is_err() {
                 if !emit_browser_url {
                     eprintln!(

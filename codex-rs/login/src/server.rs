@@ -174,6 +174,7 @@ pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
         opts.forced_chatgpt_workspace_id.as_deref(),
     );
 
+    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
     if opts.open_browser {
         let _ = webbrowser::open(&auth_url);
     }

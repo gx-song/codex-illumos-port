@@ -39,6 +39,8 @@ tokio = { workspace = true, features = [
 tracing = { workspace = true }
 url = { workspace = true }
 urlencoding = { workspace = true }
+
+[target.'cfg(not(any(target_os = "illumos", target_os = "solaris")))'.dependencies]
 webbrowser = { workspace = true }
 
 [dev-dependencies]

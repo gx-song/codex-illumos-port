@@ -1014,9 +1014,19 @@ pub(super) fn maybe_open_auth_url_in_browser(request_handle: &AppServerRequestHa
         return;
     }
 
-    if let Err(err) = webbrowser::open(url) {
+    if let Err(err) = open_auth_url(url) {
         tracing::warn!("failed to open browser for login URL: {err}");
     }
+}
+
+#[cfg(any(target_os = "illumos", target_os = "solaris"))]
+fn open_auth_url(_url: &str) -> Result<(), String> {
+    Err("browser launching is unsupported on illumos and Solaris".to_string())
+}
+
+#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
+fn open_auth_url(url: &str) -> Result<(), String> {
+    webbrowser::open(url).map_err(|err| err.to_string())
 }
 
 #[cfg(test)]

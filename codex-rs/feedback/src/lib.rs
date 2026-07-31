@@ -1,13 +1,17 @@
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
+#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 use std::collections::btree_map::Entry;
+#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 use std::fs;
 use std::io::Write;
 use std::io::{self};
+#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
+#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 use std::time::Duration;
 
 use anyhow::Result;
@@ -38,8 +42,10 @@ pub const CODEX_APP_DIRECTORY_CACHE_ATTACHMENT_FILENAME: &str = "codex-app-direc
 /// Filename used for the Windows sandbox log feedback attachment.
 pub const WINDOWS_SANDBOX_LOG_ATTACHMENT_FILENAME: &str = "windows-sandbox.log";
 const DEFAULT_MAX_BYTES: usize = 4 * 1024 * 1024; // 4 MiB
+#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 const SENTRY_DSN: &str =
     "https://ae32ed50620d7a7792c1ce5df38b3e3e@o33249.ingest.us.sentry.io/4510195390611458";
+#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 const UPLOAD_TIMEOUT_SECS: u64 = 10;
 const FEEDBACK_TAGS_TARGET: &str = "feedback_tags";
 const MAX_FEEDBACK_TAGS: usize = 64;
@@ -414,6 +420,7 @@ impl FeedbackSnapshot {
     }
 
     /// Upload feedback to Sentry with optional attachments.
+    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
     pub fn upload_feedback(&self, options: FeedbackUploadOptions<'_>) -> Result<()> {
         use std::str::FromStr;
         use std::sync::Arc;
@@ -485,6 +492,16 @@ impl FeedbackSnapshot {
         Ok(())
     }
 
+    /// Return an unsupported error because Sentry uploads are not built on illumos or Solaris.
+    #[cfg(any(target_os = "illumos", target_os = "solaris"))]
+    pub fn upload_feedback(&self, options: FeedbackUploadOptions<'_>) -> Result<()> {
+        let _ = options;
+        Err(anyhow!(
+            "feedback upload is unsupported on illumos and Solaris"
+        ))
+    }
+
+    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
     fn upload_tags(
         &self,
         classification: &str,
@@ -534,6 +551,7 @@ impl FeedbackSnapshot {
         tags
     }
 
+    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
     fn feedback_attachments(
         &self,
         include_logs: bool,
@@ -616,6 +634,7 @@ impl FeedbackSnapshot {
     }
 }
 
+#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 fn display_classification(classification: &str) -> String {
     match classification {
         "bug" => "Bug".to_string(),
@@ -749,6 +768,7 @@ mod tests {
         pretty_assertions::assert_eq!(snap.tags.get("cached").map(String::as_str), Some("true"));
     }
 
+    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
     #[test]
     fn feedback_attachments_gate_connectivity_diagnostics() {
         let extra_filename = format!("codex-feedback-extra-{}.jsonl", ThreadId::new());
@@ -824,6 +844,7 @@ mod tests {
         fs::remove_file(extra_path).expect("extra attachment should be removed");
     }
 
+    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
     #[test]
     fn path_backed_attachments_use_binary_content_types() {
         let suffix = ThreadId::new();
@@ -880,6 +901,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
     #[test]
     fn upload_tags_include_client_tags_and_preserve_reserved_fields() {
         let mut tags = BTreeMap::new();
