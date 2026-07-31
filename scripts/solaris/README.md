@@ -42,6 +42,7 @@ been validated by this work.
 | `CORE_FEATURE_TEST.md` | Interactive SSH TUI test matrix |
 | `PORTING_NOTES.md` | Source changes, dependency choices, and limitations |
 | `PUBLISHING.md` | Public-release and secret-removal checklist |
+| `RELEASE_NOTES.md` | Preview release provenance, installation, and limitations |
 
 ## Prerequisites
 
