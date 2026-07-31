@@ -1,0 +1,7 @@
+# Never commit copied operating-system files or locally built binaries.
+sysroot/
+*.tar
+*.tar.gz
+*.tgz
+codex
+codex-tui
