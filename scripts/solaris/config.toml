@@ -1,0 +1,44 @@
+# $CODEX_HOME/config.toml for an SSH TUI backed by a self-hosted model gateway.
+#
+# The gateway must expose an OpenAI Responses-compatible endpoint at
+# <base_url>/responses. No OpenAI login or browser is used.
+model_provider = "local-gateway"
+
+# Replace this with a model name accepted by the gateway.
+model = "your-model-name"
+
+# Web search is a Responses hosted tool. The self-hosted gateway must support
+# it; use `--search` for a one-off override if this is set to "disabled".
+web_search = "live"
+check_for_update_on_startup = false
+
+[analytics]
+enabled = false
+
+[feedback]
+enabled = false
+
+[tui]
+# Also prevents the TUI from fetching remote announcement tips.
+show_tooltips = false
+
+[model_providers.local-gateway]
+name = "Local Gateway"
+base_url = "http://127.0.0.1:8080/v1"
+wire_api = "responses"
+requires_openai_auth = false
+
+# For a gateway token, uncomment the next line and export the named variable.
+# env_key = "LOCAL_GATEWAY_API_KEY"
+
+[features]
+# The V8-backed host binary is intentionally not built for Solaris.
+code_mode = false
+code_mode_host = false
+
+# Disable OpenAI-hosted integrations that are not needed by the SSH TUI.
+apps = false
+plugins = false
+in_app_browser = false
+in_app_updates = false
+hooks = false
