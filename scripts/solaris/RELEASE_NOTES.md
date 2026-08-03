@@ -1,4 +1,4 @@
-# Codex TUI for illumos - Preview 1
+# Codex TUI for illumos - Preview 2
 
 This is an unofficial, experimental build of the standalone Codex terminal UI
 for 64-bit x86 illumos systems. It is not an OpenAI-supported illumos or
@@ -6,13 +6,14 @@ Solaris release.
 
 ## Build provenance
 
-- Release tag: `illumos-preview-1`
+- Release tag: `illumos-preview-2`
 - Upstream Codex base: `4642370542739d5dd080b0c87a9de06a6435d3db`
 - Rust target: `x86_64-unknown-illumos`
 - Rust: `1.95.0`
 - LLVM and LLD: `22.1.8`
 - Build host: macOS with Homebrew
 - Verified runtime: OmniOS r151058, amd64
+- Verified: August 3, 2026
 
 Compatibility with Oracle Solaris or other illumos distributions has not been
 verified.
@@ -26,8 +27,18 @@ verified.
 - `apply_patch`
 - approvals and interruption
 - session history and `codex resume`
+- non-interactive `codex exec`, including JSONL and output files
+- non-interactive `codex exec review`
+- Bash, Zsh, Fish, Elvish, and PowerShell completion generation
 - gateway-provided web search
 - text copy through terminal mechanisms such as OSC52 or tmux
+
+## Changes since Preview 1
+
+- restored `codex exec` and its `resume` and `review` subcommands
+- restored shell completion generation
+- expanded parser tests, the remote deployment preflight, and the core feature
+  test matrix for the restored commands
 
 ## Known limitations
 
@@ -39,6 +50,8 @@ verified.
 - no Sentry feedback upload
 - no Amazon Bedrock provider
 - no IDE IPC integration
+- Bash shell snapshot validation may log a warning for some startup
+  environments; Codex falls back to running without the snapshot
 
 Run Codex inside an illumos zone or another externally isolated account when
 OS-enforced isolation is required.
