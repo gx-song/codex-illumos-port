@@ -14,7 +14,7 @@ architecture.
 
 ## Status
 
-The following combination was verified on July 31, 2026:
+The following combination was verified on August 3, 2026:
 
 | Component | Tested value |
 | --- | --- |
@@ -24,7 +24,7 @@ The following combination was verified on July 31, 2026:
 | LLVM and LLD | `22.1.8` from Homebrew |
 | `pkgconf` | `3.0.4` from Homebrew |
 | Runtime OS | OmniOS r151058, amd64 |
-| Stripped binary | approximately 53 MiB |
+| Stripped binary | approximately 54 MiB |
 
 Oracle Solaris can use Rust's `x86_64-pc-solaris` target, but that path has not
 been validated by this work.
