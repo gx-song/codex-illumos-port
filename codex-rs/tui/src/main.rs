@@ -1,8 +1,12 @@
+use clap::CommandFactory;
 use clap::Parser;
 use clap::Subcommand;
+use clap_complete::Shell;
+use clap_complete::generate;
 use codex_arg0::Arg0DispatchPaths;
 use codex_arg0::arg0_dispatch_or_else;
 use codex_config::LoaderOverrides;
+use codex_exec::Cli as ExecCli;
 use codex_tui::AppExitInfo;
 use codex_tui::Cli;
 use codex_tui::ExitReason;
@@ -58,8 +62,22 @@ struct TopCli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
+    /// Run Codex non-interactively.
+    #[clap(visible_alias = "e")]
+    Exec(ExecCli),
+
+    /// Generate shell completion scripts.
+    Completion(CompletionCommand),
+
     /// Resume a previous interactive session.
     Resume(ResumeCommand),
+}
+
+#[derive(Parser, Debug)]
+struct CompletionCommand {
+    /// Shell to generate completions for.
+    #[clap(value_enum, default_value_t = Shell::Bash)]
+    shell: Shell,
 }
 
 #[derive(Parser, Debug)]
@@ -142,10 +160,37 @@ fn merge_resume_command(mut inner: Cli, command: ResumeCommand) -> anyhow::Resul
     Ok(inner)
 }
 
+fn prepare_exec_command(
+    mut exec_cli: ExecCli,
+    root_cli: &Cli,
+    root_config_overrides: CliConfigOverrides,
+) -> ExecCli {
+    exec_cli.shared.inherit_exec_root_options(&root_cli.shared);
+    exec_cli.strict_config |= root_cli.strict_config;
+    exec_cli
+        .config_overrides
+        .prepend_root_overrides(root_config_overrides);
+    exec_cli
+}
+
+fn write_completion<W: Write>(command: CompletionCommand, writer: &mut W) {
+    let mut app = TopCli::command();
+    generate(command.shell, &mut app, "codex", writer);
+}
+
 fn main() -> anyhow::Result<()> {
     arg0_dispatch_or_else(|arg0_paths: Arg0DispatchPaths| async move {
         let top_cli = TopCli::parse();
         let mut inner = match top_cli.subcommand {
+            Some(Command::Exec(exec_cli)) => {
+                let exec_cli =
+                    prepare_exec_command(exec_cli, &top_cli.inner, top_cli.config_overrides);
+                return codex_exec::run_main(exec_cli, arg0_paths).await;
+            }
+            Some(Command::Completion(command)) => {
+                write_completion(command, &mut std::io::stdout());
+                return Ok(());
+            }
             Some(Command::Resume(command)) => merge_resume_command(top_cli.inner, command)?,
             None => top_cli.inner,
         };

@@ -5,7 +5,8 @@ terminal UI on a 64-bit x86 illumos or Solaris host over SSH.
 
 It builds the standalone `codex-tui` binary, deployed under the shorter
 `codex` name. It does not build the multipurpose `codex` CLI or the V8-backed
-`codex-code-mode-host` executable.
+`codex-code-mode-host` executable. The standalone entry point also exposes the
+compatible `resume`, `exec`, `exec review`, and `completion` commands.
 
 The TUI still uses Codex core, exec-server, app-server client/protocol, and
 other internal crates. The goal is a working SSH TUI, not a new minimal Codex

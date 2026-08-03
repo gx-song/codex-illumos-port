@@ -100,21 +100,33 @@ request with:
 show_tooltips = false
 ```
 
-## Standalone resume command
+## Standalone command subset
 
-The normal multipurpose CLI owns the `resume` subcommand. Because this port
-ships `codex-tui` directly, its binary entry point adds the compatible subset:
+The normal multipurpose CLI owns the non-interactive and session-management
+subcommands. Because this port ships `codex-tui` directly, its binary entry
+point adds the compatible subset:
 
 ```text
 codex resume [SESSION_ID]
 codex resume
 codex resume --last
+codex exec [OPTIONS] [PROMPT]
+codex exec review [OPTIONS]
+codex completion [SHELL]
 ```
 
 The merge code forwards scoped TUI options, configuration overrides, model
 selection, web search, approval policy, and resume-picker flags. Parser tests
 use synthetic session IDs and model names so no local rollout metadata appears
 in the public source.
+
+`codex exec` reuses the existing `codex-exec` crate, including JSONL output,
+output schemas, output-last-message files, non-interactive resume, and review.
+It does not add a native illumos sandbox; headless commands run with the Unix
+permissions of the Codex process.
+
+Completion scripts are generated from the standalone command tree, so they
+only expose the commands shipped by this port.
 
 ## Cross-compilation wrappers
 
