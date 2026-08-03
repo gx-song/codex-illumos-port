@@ -82,6 +82,49 @@ printf '%s\n' '--- patch-me.txt ---'
 cat "$test_root/fixture/patch-me.txt"
 ```
 
+## Non-interactive CLI
+
+Run these after the interactive tests:
+
+```sh
+"$CODEX" exec \
+  --skip-git-repo-check \
+  --ephemeral \
+  --output-last-message "$test_root/exec-last.txt" \
+  'Reply with exactly ILLUMOS_EXEC_OK'
+
+cat "$test_root/exec-last.txt"
+
+printf 'Reply with exactly ILLUMOS_STDIN_OK\n' |
+  "$CODEX" exec --skip-git-repo-check --ephemeral --json -
+
+"$CODEX" completion bash >"$test_root/codex-completion.bash"
+test -s "$test_root/codex-completion.bash"
+```
+
+PASS requires the first result file to contain exactly `ILLUMOS_EXEC_OK`, the
+stdin run to emit valid JSONL ending in a successful turn, and the completion
+file to be non-empty.
+
+To test review in a disposable Git repository:
+
+```sh
+review_root="$test_root/review"
+mkdir -p "$review_root"
+cd "$review_root"
+git init
+git config user.email smoke@example.invalid
+git config user.name smoke
+printf 'original\n' >sample.txt
+git add sample.txt
+git commit -m initial
+printf 'changed\n' >sample.txt
+
+"$CODEX" -C "$review_root" exec review --uncommitted
+```
+
+PASS requires a completed review response about the change to `sample.txt`.
+
 ## Approval behavior
 
 Start a separate session:
@@ -147,7 +190,8 @@ The current port intentionally reports these as unsupported:
 
 Text copy through OSC52/tmux, local shell execution, file operations,
 `apply_patch`, approvals, Responses streaming, web search, and session resume
-remain in scope.
+remain in scope. Non-interactive `exec`, `exec review`, and completion
+generation are also supported.
 
 ## Diagnostics
 

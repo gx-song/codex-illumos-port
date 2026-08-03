@@ -183,8 +183,10 @@ if [ -x "$remote_bin" ]; then
   help_status=$?
   if [ "$help_status" -eq 0 ] \
     && printf '%s\n' "$help_output" | grep -q '^Usage: codex ' \
+    && printf '%s\n' "$help_output" | grep -q 'exec' \
+    && printf '%s\n' "$help_output" | grep -q 'completion' \
     && printf '%s\n' "$help_output" | grep -q 'resume'; then
-    pass "--help exposes the standalone TUI and resume command"
+    pass "--help exposes the standalone TUI command subset"
   else
     fail "--help is missing expected CLI surface"
   fi
@@ -197,6 +199,37 @@ if [ -x "$remote_bin" ]; then
     pass "resume --help accepts session IDs and --last"
   else
     fail "resume subcommand is unavailable or incomplete"
+  fi
+
+  exec_help="$("$remote_bin" exec --help 2>&1)"
+  exec_status=$?
+  if [ "$exec_status" -eq 0 ] \
+    && printf '%s\n' "$exec_help" | grep -q '^Usage: codex exec ' \
+    && printf '%s\n' "$exec_help" | grep -q 'review' \
+    && printf '%s\n' "$exec_help" | grep -q -- '--json'; then
+    pass "exec --help exposes non-interactive and review commands"
+  else
+    fail "exec subcommand is unavailable or incomplete"
+  fi
+
+  review_help="$("$remote_bin" exec review --help 2>&1)"
+  review_status=$?
+  if [ "$review_status" -eq 0 ] \
+    && printf '%s\n' "$review_help" | grep -q '^Usage: codex exec review ' \
+    && printf '%s\n' "$review_help" | grep -q -- '--uncommitted'; then
+    pass "exec review --help exposes review targets"
+  else
+    fail "exec review subcommand is unavailable or incomplete"
+  fi
+
+  completion_output="$("$remote_bin" completion bash 2>&1)"
+  completion_status=$?
+  if [ "$completion_status" -eq 0 ] \
+    && [ -n "$completion_output" ] \
+    && printf '%s\n' "$completion_output" | grep -q 'codex'; then
+    pass "completion generates a non-empty Bash script"
+  else
+    fail "completion generation failed"
   fi
 fi
 
