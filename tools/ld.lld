@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${SOLARIS_SYSROOT:?SOLARIS_SYSROOT is required}"
+: "${SOLARIS_GCC_LIBDIR:?SOLARIS_GCC_LIBDIR is required}"
+: "${SOLARIS_GCC_RUNTIME_LIBDIR:?SOLARIS_GCC_RUNTIME_LIBDIR is required}"
+: "${SOLARIS_LD:?SOLARIS_LD is required}"
+
+translated=(
+  "--sysroot=${SOLARIS_SYSROOT}"
+  "-L${SOLARIS_SYSROOT}/usr/lib/amd64"
+  "-L${SOLARIS_SYSROOT}/lib/amd64"
+  "-L${SOLARIS_GCC_LIBDIR}"
+  "-L${SOLARIS_GCC_RUNTIME_LIBDIR}"
+)
+
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    -C|-dy|-Qn|-Qy)
+      shift
+      ;;
+    -64)
+      translated+=(-m elf_x86_64)
+      shift
+      ;;
+    -G)
+      translated+=(-shared)
+      shift
+      ;;
+    -h)
+      translated+=(-soname "$2")
+      shift 2
+      ;;
+    -R)
+      translated+=(-rpath "$2")
+      shift 2
+      ;;
+    -R*)
+      translated+=("-rpath=${1#-R}")
+      shift
+      ;;
+    -z)
+      case "$2" in
+        ignore)
+          translated+=(--as-needed)
+          ;;
+        record)
+          translated+=(--no-as-needed)
+          ;;
+        *)
+          translated+=(-z "$2")
+          ;;
+      esac
+      shift 2
+      ;;
+    crt1.o|crti.o|crtn.o|values-Xa.o|values-xpg6.o)
+      translated+=("${SOLARIS_SYSROOT}/usr/lib/amd64/$1")
+      shift
+      ;;
+    crtbegin.o|crtbeginS.o|crtend.o|crtendS.o)
+      translated+=("${SOLARIS_GCC_LIBDIR}/$1")
+      shift
+      ;;
+    *)
+      translated+=("$1")
+      shift
+      ;;
+  esac
+done
+
+exec "${SOLARIS_LD}" "${translated[@]}"

@@ -1,0 +1,215 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: gx-song <gx-song@users.noreply.github.com>
+Date: Tue, 4 Aug 2026 17:49:54 +0800
+Subject: [PATCH 2/2] fix(illumos): bridge desktop SSH ready marker
+
+---
+ codex-rs/cli/src/main.rs                   |  4 +
+ codex-rs/cli/src/ssh_ready_marker.rs       | 87 ++++++++++++++++++++++
+ codex-rs/cli/src/ssh_ready_marker_tests.rs | 81 ++++++++++++++++++++
+ 3 files changed, 172 insertions(+)
+ create mode 100644 codex-rs/cli/src/ssh_ready_marker.rs
+ create mode 100644 codex-rs/cli/src/ssh_ready_marker_tests.rs
+
+diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
+index 11009dd90d..d792ebbf2a 100644
+--- a/codex-rs/cli/src/main.rs
++++ b/codex-rs/cli/src/main.rs
+@@ -55,6 +55,8 @@ mod plugin_cmd;
+ mod remote_control_cmd;
+ #[cfg(target_os = "windows")]
+ mod sandbox_setup;
++#[cfg(any(target_os = "illumos", target_os = "solaris", test))]
++mod ssh_ready_marker;
+ mod state_db_recovery;
+ #[cfg(not(windows))]
+ mod wsl_paths;
+@@ -1211,6 +1213,8 @@ async fn cli_main(
+                     }
+                 },
+                 Some(AppServerSubcommand::Proxy(proxy_cli)) => {
++                    #[cfg(any(target_os = "illumos", target_os = "solaris"))]
++                    ssh_ready_marker::emit_desktop_marker_if_needed()?;
+                     let socket_path = match proxy_cli.socket_path {
+                         Some(socket_path) => socket_path,
+                         None => {
+diff --git a/codex-rs/cli/src/ssh_ready_marker.rs b/codex-rs/cli/src/ssh_ready_marker.rs
+new file mode 100644
+index 0000000000..fa38134701
+--- /dev/null
++++ b/codex-rs/cli/src/ssh_ready_marker.rs
+@@ -0,0 +1,87 @@
++#[cfg(any(target_os = "illumos", target_os = "solaris"))]
++use std::io;
++#[cfg(any(target_os = "illumos", target_os = "solaris", test))]
++use std::io::Write;
++#[cfg(any(target_os = "illumos", target_os = "solaris"))]
++use std::process::Command;
++
++const MARKER_LEN: usize = 8;
++
++#[derive(Debug, Eq, PartialEq)]
++struct DesktopMarker<'a> {
++    encoded: &'a str,
++    bytes: [u8; MARKER_LEN],
++}
++
++struct ShellMarkerOutput<'a> {
++    succeeded: bool,
++    bytes: &'a [u8],
++}
++
++#[cfg(any(target_os = "illumos", target_os = "solaris"))]
++pub(crate) fn emit_desktop_marker_if_needed() -> io::Result<()> {
++    let Ok(payload) = std::env::var("CODEX_REMOTE_PAYLOAD") else {
++        return Ok(());
++    };
++    let Some(marker) = decode_desktop_marker(&payload) else {
++        return Ok(());
++    };
++
++    let shell_output = Command::new("/bin/sh")
++        .args([
++            "-c",
++            "printf '%b' \"$1\"",
++            "codex-ssh-ready-marker-check",
++            marker.encoded,
++        ])
++        .output()?;
++    let mut stdout = io::stdout().lock();
++    write_marker_if_needed(
++        &marker,
++        ShellMarkerOutput {
++            succeeded: shell_output.status.success(),
++            bytes: &shell_output.stdout,
++        },
++        &mut stdout,
++    )
++}
++
++fn write_marker_if_needed(
++    marker: &DesktopMarker<'_>,
++    shell_output: ShellMarkerOutput<'_>,
++    output: &mut impl Write,
++) -> std::io::Result<()> {
++    if shell_output.succeeded && shell_output.bytes == marker.bytes {
++        return Ok(());
++    }
++
++    // ksh93 requires `\0ddd` for octal escapes in `printf %b`, while the
++    // desktop SSH bootstrap currently sends `\ddd`.
++    output.write_all(&marker.bytes)?;
++    output.flush()
++}
++
++fn decode_desktop_marker(payload: &str) -> Option<DesktopMarker<'_>> {
++    let encoded = payload.strip_prefix("printf '%b' '")?.split_once("'; ")?.0;
++    let chunks = encoded.as_bytes().chunks_exact(4);
++    if !chunks.remainder().is_empty() || chunks.len() != MARKER_LEN {
++        return None;
++    }
++
++    let mut bytes = [0_u8; MARKER_LEN];
++    for (output, chunk) in bytes.iter_mut().zip(chunks) {
++        if chunk[0] != b'\\' || !chunk[1..].iter().all(|digit| matches!(digit, b'0'..=b'7')) {
++            return None;
++        }
++        let value = u16::from(chunk[1] - b'0') * 64
++            + u16::from(chunk[2] - b'0') * 8
++            + u16::from(chunk[3] - b'0');
++        *output = u8::try_from(value).ok()?;
++    }
++
++    Some(DesktopMarker { encoded, bytes })
++}
++
++#[cfg(test)]
++#[path = "ssh_ready_marker_tests.rs"]
++mod tests;
+diff --git a/codex-rs/cli/src/ssh_ready_marker_tests.rs b/codex-rs/cli/src/ssh_ready_marker_tests.rs
+new file mode 100644
+index 0000000000..02763747c6
+--- /dev/null
++++ b/codex-rs/cli/src/ssh_ready_marker_tests.rs
+@@ -0,0 +1,81 @@
++use super::*;
++use pretty_assertions::assert_eq;
++
++#[test]
++fn decodes_desktop_ssh_ready_marker() {
++    assert_eq!(
++        decode_desktop_marker("printf '%b' '\\224\\035\\225\\313\\233\\322\\260\\362'; PATH=/bin"),
++        Some(DesktopMarker {
++            encoded: "\\224\\035\\225\\313\\233\\322\\260\\362",
++            bytes: [0x94, 0x1d, 0x95, 0xcb, 0x9b, 0xd2, 0xb0, 0xf2],
++        })
++    );
++}
++
++#[test]
++fn rejects_malformed_desktop_ssh_ready_marker() {
++    assert_eq!(
++        decode_desktop_marker("printf '%b' '\\224\\035'; PATH=/bin"),
++        None
++    );
++    assert_eq!(
++        decode_desktop_marker("printf '%b' '\\224\\035\\225\\318\\233\\322\\260\\362'; PATH=/bin"),
++        None
++    );
++    assert_eq!(
++        decode_desktop_marker("printf '%b' '\\400\\035\\225\\313\\233\\322\\260\\362'; PATH=/bin"),
++        None
++    );
++}
++
++#[test]
++fn preserves_boundary_marker_bytes() {
++    assert_eq!(
++        decode_desktop_marker("printf '%b' '\\000\\077\\100\\177\\200\\277\\300\\377'; PATH=/bin"),
++        Some(DesktopMarker {
++            encoded: "\\000\\077\\100\\177\\200\\277\\300\\377",
++            bytes: [0x00, 0x3f, 0x40, 0x7f, 0x80, 0xbf, 0xc0, 0xff],
++        })
++    );
++}
++
++#[test]
++fn does_not_repeat_marker_when_shell_output_matches() {
++    let marker =
++        decode_desktop_marker("printf '%b' '\\224\\035\\225\\313\\233\\322\\260\\362'; PATH=/bin")
++            .expect("payload should contain a marker");
++    let mut output = Vec::new();
++
++    write_marker_if_needed(
++        &marker,
++        ShellMarkerOutput {
++            succeeded: true,
++            bytes: &marker.bytes,
++        },
++        &mut output,
++    )
++    .expect("matching shell output should succeed");
++
++    assert_eq!(output, Vec::<u8>::new());
++}
++
++#[test]
++fn repeats_marker_when_shell_output_is_incompatible() {
++    let marker =
++        decode_desktop_marker("printf '%b' '\\224\\035\\225\\313\\233\\322\\260\\362'; PATH=/bin")
++            .expect("payload should contain a marker");
++    let incompatible_output = br"\224\x1d\225";
++    let mut output = Vec::new();
++
++    write_marker_if_needed(
++        &marker,
++        ShellMarkerOutput {
++            succeeded: true,
++            bytes: incompatible_output,
++        },
++        &mut output,
++    )
++    .expect("marker fallback should succeed");
++
++    assert_eq!(output, marker.bytes);
++}

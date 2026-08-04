@@ -1,0 +1,6 @@
+/dist/
+/target/
+/solaris-sysroot/
+*.tar.gz
+*.cdx.json
+codex
