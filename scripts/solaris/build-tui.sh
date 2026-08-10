@@ -8,14 +8,37 @@ Usage: scripts/solaris/build-tui.sh [RUST_TARGET]
 Without RUST_TARGET, builds natively for the current system.
 For x86_64-unknown-illumos or x86_64-pc-solaris cross builds, SOLARIS_SYSROOT
 must point to a matching sysroot containing /usr/include, /usr/lib, and /lib.
-The release profile is overridden for minimum size: opt-level=z, fat LTO,
-one codegen unit, panic=abort, no debug info, and stripped symbols.
+The release profile is overridden for a parallel size-optimized build:
+opt-level=z, thin LTO, parallel codegen, panic=abort, no debug info, and
+stripped symbols.
 Set NO_STRIP=1 to retain symbols and line tables for diagnostics.
+Set CODEX_BUILD_FULL_CLI=1 to build the multipurpose `codex` binary required
+by desktop SSH remote connections instead of the standalone TUI.
+Set CARGO_BUILD_JOBS or CARGO_PROFILE_RELEASE_CODEGEN_UNITS to override the
+detected online CPU count.
 
 Example:
   export SOLARIS_SYSROOT="$HOME/.cache/codex/solaris-sysroot"
   scripts/solaris/build-tui.sh x86_64-unknown-illumos
+  CODEX_BUILD_FULL_CLI=1 scripts/solaris/build-tui.sh x86_64-unknown-illumos
 EOF
+}
+
+detect_parallel_jobs() {
+  local jobs=""
+  if command -v getconf >/dev/null 2>&1; then
+    jobs="$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)"
+  fi
+  if [[ ! "${jobs}" =~ ^[1-9][0-9]*$ ]] && command -v sysctl >/dev/null 2>&1; then
+    jobs="$(sysctl -n hw.logicalcpu 2>/dev/null || true)"
+  fi
+  if [[ ! "${jobs}" =~ ^[1-9][0-9]*$ ]] && command -v nproc >/dev/null 2>&1; then
+    jobs="$(nproc 2>/dev/null || true)"
+  fi
+  if [[ ! "${jobs}" =~ ^[1-9][0-9]*$ ]]; then
+    jobs=1
+  fi
+  printf '%s\n' "${jobs}"
 }
 
 if [[ "$#" -gt 1 ]]; then
@@ -38,6 +61,14 @@ case "${NO_STRIP:-0}" in
     ;;
 esac
 
+case "${CODEX_BUILD_FULL_CLI:-0}" in
+  0|1) ;;
+  *)
+    echo "CODEX_BUILD_FULL_CLI must be 0 or 1." >&2
+    exit 2
+    ;;
+esac
+
 target="${1:-}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 script_dir="${repo_root}/scripts/solaris"
@@ -45,10 +76,19 @@ strip_tool=()
 cd "${repo_root}/codex-rs"
 
 # Override the workspace release profile without changing Cargo.toml. These
-# defaults favor deployment size and spend more CPU/RAM on the local builder.
+# defaults favor deployment size while keeping optimization parallel.
+export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-$(detect_parallel_jobs)}"
+if [[ ! "${CARGO_BUILD_JOBS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "CARGO_BUILD_JOBS must be a positive integer." >&2
+  exit 2
+fi
 export CARGO_PROFILE_RELEASE_OPT_LEVEL="${CARGO_PROFILE_RELEASE_OPT_LEVEL:-z}"
-export CARGO_PROFILE_RELEASE_LTO="${CARGO_PROFILE_RELEASE_LTO:-fat}"
-export CARGO_PROFILE_RELEASE_CODEGEN_UNITS="${CARGO_PROFILE_RELEASE_CODEGEN_UNITS:-1}"
+export CARGO_PROFILE_RELEASE_LTO="${CARGO_PROFILE_RELEASE_LTO:-thin}"
+export CARGO_PROFILE_RELEASE_CODEGEN_UNITS="${CARGO_PROFILE_RELEASE_CODEGEN_UNITS:-${CARGO_BUILD_JOBS}}"
+if [[ ! "${CARGO_PROFILE_RELEASE_CODEGEN_UNITS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "CARGO_PROFILE_RELEASE_CODEGEN_UNITS must be a positive integer." >&2
+  exit 2
+fi
 export CARGO_PROFILE_RELEASE_PANIC="abort"
 export CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO="off"
 if [[ "${NO_STRIP:-0}" == "1" ]]; then
@@ -62,10 +102,18 @@ else
   export CARGO_PROFILE_RELEASE_STRIP="none"
 fi
 
+if [[ "${CODEX_BUILD_FULL_CLI:-0}" == "1" ]]; then
+  package="codex-cli"
+  binary="codex"
+else
+  package="codex-tui"
+  binary="codex-tui"
+fi
+
 build_args=(
   --manifest-path Cargo.toml
-  -p codex-tui
-  --bin codex-tui
+  -p "${package}"
+  --bin "${binary}"
   --release
   --locked
 )
@@ -74,83 +122,26 @@ if [[ -n "${target}" ]]; then
   rustup target add "${target}"
   host_target="$(rustc -vV | sed -n 's/^host: //p')"
   if [[ "${target}" =~ ^x86_64-(pc-solaris|unknown-illumos)$ && "${target}" != "${host_target}" ]]; then
-    : "${SOLARIS_SYSROOT:?Set SOLARIS_SYSROOT to the extracted Solaris sysroot.}"
-    sysroot="$(cd "${SOLARIS_SYSROOT}" && pwd)"
+    export SOLARIS_RUST_TARGET="${target}"
+    cross_env="$("${script_dir}/cross/env.sh")"
+    eval "${cross_env}"
+    unset cross_env
+    sysroot="${SOLARIS_SYSROOT}"
 
-    for required_file in \
-      usr/include/assert.h \
-      usr/include/sys/types.h \
-      usr/lib/amd64/crt1.o \
-      usr/lib/amd64/crti.o \
-      usr/lib/amd64/crtn.o \
-      usr/lib/amd64/values-Xa.o \
-      usr/lib/amd64/values-xpg6.o
-    do
-      if [[ ! -f "${sysroot}/${required_file}" ]]; then
-        echo "Solaris sysroot is missing ${required_file}: ${sysroot}" >&2
-        exit 2
-      fi
-    done
-
-    gcc_crtbegin="$(find "${sysroot}/usr/gcc" "${sysroot}"/opt/local/gcc* \
-      -type f -name crtbegin.o ! -path '*/32/*' -print -quit 2>/dev/null || true)"
-    if [[ -z "${gcc_crtbegin}" ]]; then
-      echo "Sysroot is missing an amd64 GCC crtbegin.o under usr/gcc or opt/local/gcc*." >&2
+    openssl_include_dir="${sysroot}/usr/include"
+    if [[ ! -f "${openssl_include_dir}/openssl/opensslv.h" ]]; then
+      echo "Sysroot is missing OpenSSL headers under usr/include/openssl." >&2
       exit 2
     fi
-    gcc_libdir="$(dirname "${gcc_crtbegin}")"
-    gcc_root="${gcc_libdir%%/lib/gcc/*}"
-    for required_file in crtbegin.o crtbeginS.o crtend.o crtendS.o libgcc.a; do
-      if [[ ! -e "${gcc_libdir}/${required_file}" ]]; then
-        echo "Solaris GCC runtime is missing ${required_file}: ${gcc_libdir}" >&2
-        exit 2
+    openssl_libdir=""
+    for candidate in "${sysroot}/usr/lib/amd64" "${sysroot}/lib/amd64"; do
+      if [[ -e "${candidate}/libssl.so" && -e "${candidate}/libcrypto.so" ]]; then
+        openssl_libdir="${candidate}"
+        break
       fi
     done
-    gcc_runtime="$(find "${gcc_root}" -type f -name libgcc_s.so.1 \
-      ! -path '*/32/*' -print -quit 2>/dev/null || true)"
-    if [[ -z "${gcc_runtime}" ]]; then
-      echo "Sysroot is missing an amd64 libgcc_s.so.1." >&2
-      exit 2
-    fi
-    gcc_runtime_libdir="$(dirname "${gcc_runtime}")"
-    gcc_runtime_rpath="/${gcc_runtime_libdir#"${sysroot}/"}"
-
-    llvm_prefix="${LLVM_PREFIX:-}"
-    if [[ -z "${llvm_prefix}" ]] && command -v brew >/dev/null 2>&1; then
-      llvm_prefix="$(brew --prefix llvm)"
-    fi
-
-    clang="${SOLARIS_CLANG:-${llvm_prefix:+${llvm_prefix}/bin/clang}}"
-    clangxx="${SOLARIS_CLANGXX:-${llvm_prefix:+${llvm_prefix}/bin/clang++}}"
-    llvm_ar="${SOLARIS_AR:-${llvm_prefix:+${llvm_prefix}/bin/llvm-ar}}"
-    llvm_ranlib="${SOLARIS_RANLIB:-${llvm_prefix:+${llvm_prefix}/bin/llvm-ranlib}}"
-    llvm_readelf="${SOLARIS_READELF:-${llvm_prefix:+${llvm_prefix}/bin/llvm-readelf}}"
-    llvm_strip="${SOLARIS_STRIP:-${llvm_prefix:+${llvm_prefix}/bin/llvm-strip}}"
-
-    for tool in \
-      "${clang}" \
-      "${clangxx}" \
-      "${llvm_ar}" \
-      "${llvm_ranlib}" \
-      "${llvm_readelf}" \
-      "${llvm_strip}"
-    do
-      if [[ -z "${tool}" || ! -x "${tool}" ]]; then
-        echo "Missing LLVM tool: ${tool:-unset}. Install Homebrew llvm or set LLVM_PREFIX." >&2
-        exit 2
-      fi
-    done
-
-    solaris_ld="${SOLARIS_LD:-}"
-    if [[ -z "${solaris_ld}" ]]; then
-      lld_bin="${LLD_BIN:-}"
-      if [[ -z "${lld_bin}" ]] && command -v brew >/dev/null 2>&1; then
-        lld_bin="$(brew --prefix lld)/bin"
-      fi
-      solaris_ld="${lld_bin:+${lld_bin}/ld.lld}"
-    fi
-    if [[ -z "${solaris_ld}" || ! -x "${solaris_ld}" ]]; then
-      echo "Missing ld.lld. Install Homebrew lld or set SOLARIS_LD." >&2
+    if [[ -z "${openssl_libdir}" ]]; then
+      echo "Sysroot is missing amd64 libssl.so and libcrypto.so." >&2
       exit 2
     fi
 
@@ -159,32 +150,9 @@ if [[ -n "${target}" ]]; then
       exit 2
     fi
 
-    export SOLARIS_SYSROOT="${sysroot}"
-    export SOLARIS_CLANG="${clang}"
-    export SOLARIS_CLANGXX="${clangxx}"
-    export SOLARIS_RUST_TARGET="${target}"
-    if [[ "${target}" == "x86_64-unknown-illumos" ]]; then
-      # Clang recognizes the illumos frontend triple but its Darwin-hosted
-      # driver emits macOS linker flags. The Solaris 2.11 driver uses the
-      # matching illumos ABI and emits the expected Sun linker arguments.
-      export SOLARIS_CLANG_TARGET="x86_64-pc-solaris2.11"
-    else
-      export SOLARIS_CLANG_TARGET="${target}"
-    fi
-    export SOLARIS_LD="${solaris_ld}"
-    export SOLARIS_GCC_LIBDIR="${gcc_libdir}"
-    export SOLARIS_GCC_RUNTIME_LIBDIR="${gcc_runtime_libdir}"
-    export SOLARIS_GCC_RUNTIME_RPATH="${gcc_runtime_rpath}"
-    target_env_suffix="${target//-/_}"
     target_env_name="$(printf '%s' "${target}" | tr '[:lower:]-' '[:upper:]_')"
-    export "CC_${target_env_suffix}=${script_dir}/clang-solaris.sh"
-    export "CXX_${target_env_suffix}=${script_dir}/clangxx-solaris.sh"
-    export "AR_${target_env_suffix}=${llvm_ar}"
-    export "RANLIB_${target_env_suffix}=${llvm_ranlib}"
-    export "CARGO_TARGET_${target_env_name}_LINKER=${script_dir}/clang-solaris.sh"
-    export "PKG_CONFIG_ALLOW_CROSS_${target_env_suffix}=1"
-    export "PKG_CONFIG_SYSROOT_DIR_${target_env_suffix}=${sysroot}"
-    export "PKG_CONFIG_LIBDIR_${target_env_suffix}=${sysroot}/usr/lib/amd64/pkgconfig:${sysroot}/usr/lib/pkgconfig:${sysroot}/usr/share/pkgconfig"
+    export "${target_env_name}_OPENSSL_INCLUDE_DIR=${openssl_include_dir}"
+    export "${target_env_name}_OPENSSL_LIB_DIR=${openssl_libdir}"
     export AWS_LC_SYS_CMAKE_BUILDER="${AWS_LC_SYS_CMAKE_BUILDER:-0}"
 
     probe_dir="$(mktemp -d "${TMPDIR:-/tmp}/codex-solaris-probe.XXXXXX")"
@@ -194,14 +162,14 @@ if [[ -n "${target}" ]]; then
       '#include <sys/types.h>' \
       'int main(void) { return 0; }' \
       >"${probe_dir}/probe.c"
-    "${script_dir}/clang-solaris.sh" \
+    "${SOLARIS_C_COMPILER_WRAPPER}" \
       -Werror \
       -c "${probe_dir}/probe.c" \
       -o "${probe_dir}/probe.o"
-    "${script_dir}/clang-solaris.sh" \
+    "${SOLARIS_C_COMPILER_WRAPPER}" \
       "${probe_dir}/probe.o" \
       -o "${probe_dir}/probe"
-    probe_program_headers="$("${llvm_readelf}" -l "${probe_dir}/probe")"
+    probe_program_headers="$("${SOLARIS_READELF}" -l "${probe_dir}/probe")"
     if [[ "${probe_program_headers}" != *"/lib/amd64/ld.so.1"* ]]; then
       echo "Solaris linker probe has the wrong runtime interpreter." >&2
       exit 2
@@ -209,7 +177,7 @@ if [[ -n "${target}" ]]; then
     rm -rf "${probe_dir}"
     trap - EXIT
 
-    strip_tool=("${llvm_strip}" --strip-all)
+    strip_tool=("${SOLARIS_STRIP}" --strip-all)
   elif [[ "${target}" != "${host_target}" ]]; then
     target_env_name="$(printf '%s' "${target}" | tr '[:lower:]-' '[:upper:]_')"
     linker_var="CARGO_TARGET_${target_env_name}_LINKER"
@@ -221,7 +189,7 @@ if [[ -n "${target}" ]]; then
   build_args+=(--target "${target}")
 fi
 
-echo "Release profile: opt-level=${CARGO_PROFILE_RELEASE_OPT_LEVEL}, lto=${CARGO_PROFILE_RELEASE_LTO}, codegen-units=${CARGO_PROFILE_RELEASE_CODEGEN_UNITS}, panic=abort, debug=${CARGO_PROFILE_RELEASE_DEBUG}, strip=${CARGO_PROFILE_RELEASE_STRIP}"
+echo "Release profile: jobs=${CARGO_BUILD_JOBS}, opt-level=${CARGO_PROFILE_RELEASE_OPT_LEVEL}, lto=${CARGO_PROFILE_RELEASE_LTO}, codegen-units=${CARGO_PROFILE_RELEASE_CODEGEN_UNITS}, panic=abort, debug=${CARGO_PROFILE_RELEASE_DEBUG}, strip=${CARGO_PROFILE_RELEASE_STRIP}"
 cargo build "${build_args[@]}"
 
 if [[ -n "${target}" ]]; then
@@ -229,13 +197,13 @@ if [[ -n "${target}" ]]; then
   if [[ "${target_dir}" != /* ]]; then
     target_dir="${repo_root}/codex-rs/${target_dir}"
   fi
-  output="${target_dir}/${target}/release/codex-tui"
+  output="${target_dir}/${target}/release/${binary}"
 else
   target_dir="${CARGO_TARGET_DIR:-${repo_root}/codex-rs/target}"
   if [[ "${target_dir}" != /* ]]; then
     target_dir="${repo_root}/codex-rs/${target_dir}"
   fi
-  output="${target_dir}/release/codex-tui"
+  output="${target_dir}/release/${binary}"
 fi
 
 if [[ "${NO_STRIP:-0}" != "1" ]]; then

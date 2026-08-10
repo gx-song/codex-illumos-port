@@ -73,6 +73,8 @@ mod queue_cmd;
 mod remote_control_cmd;
 #[cfg(target_os = "windows")]
 mod sandbox_setup;
+#[cfg(any(target_os = "illumos", target_os = "solaris", test))]
+mod ssh_ready_marker;
 mod state_db_recovery;
 #[cfg(not(windows))]
 mod wsl_paths;
@@ -1425,6 +1427,8 @@ async fn cli_main(
                     }
                 },
                 Some(AppServerSubcommand::Proxy(proxy_cli)) => {
+                    #[cfg(any(target_os = "illumos", target_os = "solaris"))]
+                    ssh_ready_marker::emit_desktop_marker_if_needed()?;
                     let socket_path = match proxy_cli.socket_path {
                         Some(socket_path) => socket_path,
                         None => {

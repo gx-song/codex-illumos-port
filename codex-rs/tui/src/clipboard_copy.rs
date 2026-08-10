@@ -232,7 +232,7 @@ fn is_wsl_session() -> bool {
     false
 }
 
-/// Run arboard with stderr suppressed.
+/// Copy text through arboard.
 ///
 /// On macOS, `arboard::Clipboard::new()` initializes `NSPasteboard` which
 /// triggers `os_log` / `NSLog` output on stderr. Because the TUI owns the
@@ -249,6 +249,7 @@ fn arboard_copy(text: &str, html: Option<&str>) -> Result<Option<ClipboardLease>
         .get_or_init(|| std::sync::Mutex::new(()))
         .lock()
         .map_err(|_| "stderr suppression lock poisoned".to_string())?;
+    #[cfg(target_os = "macos")]
     let _guard = SuppressStderr::new();
     let mut clipboard =
         arboard::Clipboard::new().map_err(|e| format!("clipboard unavailable: {e}"))?;
@@ -462,16 +463,6 @@ impl Drop for SuppressStderr {
                 libc::close(saved);
             }
         }
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-struct SuppressStderr;
-
-#[cfg(not(target_os = "macos"))]
-impl SuppressStderr {
-    fn new() -> Self {
-        Self
     }
 }
 

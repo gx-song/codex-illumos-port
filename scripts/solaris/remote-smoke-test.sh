@@ -14,6 +14,10 @@ Environment:
                           Default: .local/bin/codex
   CODEX_REMOTE_HOME       Codex home relative to $HOME or absolute.
                           Default: .codex
+  CODEX_EXPECTED_VERSION  Exact expected output from `codex --version`.
+  CODEX_EXPECTED_SHA256   Expected SHA-256 digest of the remote binary.
+  CODEX_EXPECT_FULL_CLI   Set to 1 to require the full CLI's app-server
+                          subcommand. Default: 0
   REDACT_OUTPUT           Set to 1 before publishing the command output.
                           Suppresses host inventory, paths, usernames, and
                           model names from normal test output. SSH transport
@@ -41,7 +45,31 @@ shift
 
 remote_bin="${CODEX_REMOTE_BIN:-.local/bin/codex}"
 remote_home="${CODEX_REMOTE_HOME:-.codex}"
+expected_version="${CODEX_EXPECTED_VERSION:-}"
+expected_sha256="${CODEX_EXPECTED_SHA256:-}"
+expect_full_cli="${CODEX_EXPECT_FULL_CLI:-0}"
+expected_version_name=""
+expected_version_number=""
+if [[ -n "${expected_version}" ]]; then
+  case "${expected_version}" in
+    *" "*)
+      expected_version_name="${expected_version%% *}"
+      expected_version_number="${expected_version#* }"
+      ;;
+    *)
+      echo "CODEX_EXPECTED_VERSION must contain the command name and version." >&2
+      exit 2
+      ;;
+  esac
+fi
 redact_output="${REDACT_OUTPUT:-0}"
+case "${expect_full_cli}" in
+  0|1) ;;
+  *)
+    echo "CODEX_EXPECT_FULL_CLI must be 0 or 1." >&2
+    exit 2
+    ;;
+esac
 case "${redact_output}" in
   0|1) ;;
   *)
@@ -49,12 +77,12 @@ case "${redact_output}" in
     exit 2
     ;;
 esac
-ssh_args=()
+ssh_command=(ssh)
 if [[ -n "${SOLARIS_SSH_PROXY_JUMP:-}" ]]; then
-  ssh_args+=(-J "${SOLARIS_SSH_PROXY_JUMP}")
+  ssh_command+=(-J "${SOLARIS_SSH_PROXY_JUMP}")
 fi
 if [[ "${redact_output}" == "1" ]]; then
-  ssh_args+=(-o LogLevel=ERROR)
+  ssh_command+=(-o LogLevel=ERROR)
 fi
 
 echo "== Codex illumos/Solaris deployment preflight =="
@@ -64,10 +92,14 @@ else
   echo "Host: ${ssh_host}"
 fi
 
-ssh "${ssh_args[@]}" "${ssh_host}" sh -s -- \
+"${ssh_command[@]}" "${ssh_host}" sh -s -- \
   "${remote_bin}" \
   "${remote_home}" \
   "${redact_output}" \
+  "${expected_version_name}" \
+  "${expected_version_number}" \
+  "${expected_sha256}" \
+  "${expect_full_cli}" \
   "$@" <<'REMOTE'
 set -u
 
@@ -101,10 +133,32 @@ resolve_home_path() {
   esac
 }
 
+sha256_file() {
+  if command -v digest >/dev/null 2>&1; then
+    digest -a sha256 "$1"
+  elif command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 "$1" | sed 's/^.*= //'
+  else
+    return 127
+  fi
+}
+
 remote_bin="$(resolve_home_path "$1")"
 remote_home="$(resolve_home_path "$2")"
 redact_output="$3"
-shift 3
+expected_version_name="$4"
+expected_version_number="$5"
+expected_sha256="$6"
+expect_full_cli="$7"
+shift 7
+expected_version=""
+if [ -n "$expected_version_name" ] || [ -n "$expected_version_number" ]; then
+  expected_version="$expected_version_name $expected_version_number"
+fi
 
 os_name="$(uname -s 2>/dev/null || true)"
 os_release="$(uname -r 2>/dev/null || true)"
@@ -168,13 +222,29 @@ if [ -e "$remote_bin" ]; then
   else
     pass "all dynamic libraries resolve"
   fi
+
+  if [ -n "$expected_sha256" ]; then
+    actual_sha256="$(sha256_file "$remote_bin" 2>/dev/null)"
+    checksum_status=$?
+    if [ "$checksum_status" -eq 0 ] && [ "$actual_sha256" = "$expected_sha256" ]; then
+      pass "SHA-256 matches the local artifact"
+    elif [ "$checksum_status" -eq 127 ]; then
+      fail "no SHA-256 utility is available on the target"
+    else
+      fail "SHA-256 does not match the local artifact"
+    fi
+  fi
 fi
 
 if [ -x "$remote_bin" ]; then
   version_output="$("$remote_bin" --version 2>&1)"
   version_status=$?
-  if [ "$version_status" -eq 0 ] && [ -n "$version_output" ]; then
+  if [ "$version_status" -eq 0 ] \
+    && [ -n "$version_output" ] \
+    && { [ -z "$expected_version" ] || [ "$version_output" = "$expected_version" ]; }; then
     pass "--version runs: $version_output"
+  elif [ "$version_status" -eq 0 ] && [ -n "$expected_version" ]; then
+    fail "--version returned an unexpected version: $version_output"
   else
     fail "--version failed with status $version_status"
   fi
@@ -186,9 +256,20 @@ if [ -x "$remote_bin" ]; then
     && printf '%s\n' "$help_output" | grep -q 'exec' \
     && printf '%s\n' "$help_output" | grep -q 'completion' \
     && printf '%s\n' "$help_output" | grep -q 'resume'; then
-    pass "--help exposes the standalone TUI command subset"
+    pass "--help exposes the expected common CLI surface"
   else
     fail "--help is missing expected CLI surface"
+  fi
+
+  if [ "$expect_full_cli" -eq 1 ]; then
+    app_server_help="$("$remote_bin" app-server --help 2>&1)"
+    app_server_status=$?
+    if [ "$app_server_status" -eq 0 ] \
+      && printf '%s\n' "$app_server_help" | grep -q '^Usage: codex app-server '; then
+      pass "app-server --help confirms the full CLI artifact"
+    else
+      fail "app-server subcommand is unavailable; this is not the expected full CLI"
+    fi
   fi
 
   resume_help="$("$remote_bin" resume --help 2>&1)"
@@ -357,7 +438,7 @@ printf '\nRemote checks: %d passed, %d warnings, %d failed\n' \
 REMOTE
 remote_status=$?
 
-if ssh "${ssh_args[@]}" -tt "${ssh_host}" \
+if "${ssh_command[@]}" -tt "${ssh_host}" \
   'if test -t 0 && test -t 1 && test -c /dev/tty; then printf "PASS  SSH pseudo-terminal allocation works\n"; else printf "FAIL  SSH pseudo-terminal allocation failed\n"; exit 1; fi' \
   </dev/null
 then

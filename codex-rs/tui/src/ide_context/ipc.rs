@@ -610,6 +610,26 @@ fn validate_unix_peer_owner(stream: &std::os::unix::net::UnixStream) -> std::io:
     ensure_peer_uid_matches_current_user(peer_uid)
 }
 
+#[cfg(any(target_os = "illumos", target_os = "solaris"))]
+fn validate_unix_peer_owner(stream: &std::os::unix::net::UnixStream) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+
+    let mut credentials = std::ptr::null_mut();
+    let result = unsafe { libc::getpeerucred(stream.as_raw_fd(), &mut credentials) };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if credentials.is_null() {
+        return Err(std::io::Error::other(
+            "getpeerucred returned null credentials",
+        ));
+    }
+
+    let peer_uid = unsafe { libc::ucred_geteuid(credentials) };
+    unsafe { libc::ucred_free(credentials) };
+    ensure_peer_uid_matches_current_user(peer_uid)
+}
+
 #[cfg(all(
     unix,
     not(any(
@@ -619,7 +639,9 @@ fn validate_unix_peer_owner(stream: &std::os::unix::net::UnixStream) -> std::io:
         target_os = "freebsd",
         target_os = "openbsd",
         target_os = "netbsd",
-        target_os = "dragonfly"
+        target_os = "dragonfly",
+        target_os = "illumos",
+        target_os = "solaris"
     ))
 ))]
 fn validate_unix_peer_owner(_stream: &std::os::unix::net::UnixStream) -> std::io::Result<()> {
