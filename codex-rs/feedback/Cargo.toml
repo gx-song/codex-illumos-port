@@ -19,6 +19,7 @@ tracing-subscriber = { workspace = true }
 sentry = { version = "0.46" }
 
 [dev-dependencies]
+log = { workspace = true }
 pretty_assertions = { workspace = true }
 
 [lib]

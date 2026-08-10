@@ -84,18 +84,19 @@ pub(crate) struct ToolSuggestCandidates {
 
 impl ToolRouter {
     #[cfg(test)]
-    pub(crate) fn from_tools(
+    pub(crate) fn from_registry(
         turn_context: &TurnContext,
-        tool_runtimes: Vec<Arc<dyn CoreToolRuntime>>,
+        registry: ToolRegistry,
         hosted_specs: Vec<ToolSpec>,
         tool_search_handler_cache: &ToolSearchHandlerCache,
     ) -> Self {
         finalize_tool_router(
             turn_context,
-            ToolRegistry::from_tools(tool_runtimes),
+            registry,
             hosted_specs,
             tool_search_handler_cache,
         )
+        .expect("test tool registry should not contain duplicate tools")
     }
 
     pub(crate) fn from_parts(registry: ToolRegistry, model_visible_specs: Vec<ToolSpec>) -> Self {
@@ -160,7 +161,7 @@ impl ToolRouter {
                 call_id,
                 ..
             } => {
-                let tool_name = ToolName::new(namespace, name);
+                let tool_name = ToolName::new(namespace, name).with_default_namespace();
                 Ok(Some(ToolCall {
                     tool_name,
                     call_id,
@@ -195,7 +196,7 @@ impl ToolRouter {
                 call_id,
                 ..
             } => Ok(Some(ToolCall {
-                tool_name: ToolName::new(namespace, name),
+                tool_name: ToolName::new(namespace, name).with_default_namespace(),
                 call_id,
                 payload: ToolPayload::Custom { input },
                 encrypted_function_args: None,

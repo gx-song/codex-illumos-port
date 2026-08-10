@@ -50,6 +50,9 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
     override_usage = "codex [OPTIONS] [PROMPT]\n       codex [OPTIONS] <COMMAND> [ARGS]"
 )]
 struct TopCli {
+    #[arg(long, hide = true)]
+    psp: bool,
+
     #[clap(flatten)]
     config_overrides: CliConfigOverrides,
 
@@ -194,6 +197,7 @@ fn main() -> anyhow::Result<()> {
             Some(Command::Resume(command)) => merge_resume_command(top_cli.inner, command)?,
             None => top_cli.inner,
         };
+        inner.psp = top_cli.psp;
         inner
             .config_overrides
             .raw_overrides
