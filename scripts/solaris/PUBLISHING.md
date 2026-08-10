@@ -98,12 +98,21 @@ that userspace. If publishing it separately:
 - include the repository `LICENSE`, applicable notices, a modified-source link,
   and a third-party license report or SBOM
 
+The illumos version uses SemVer build metadata such as
+`0.148.0-alpha.5+illumos.8cabf5a6cf`. Publish it through the manual port release
+process documented here. Do not use the upstream `rust-release.yml` workflow or
+`scripts/install/install.sh`; their version validation intentionally rejects
+this port-specific version format.
+
 Generate a checksum on macOS:
 
 ```sh
 shasum -a 256 \
-  codex-rs/target/x86_64-unknown-illumos/release/codex-tui
+  codex-rs/target/x86_64-unknown-illumos/release/codex
 ```
+
+Use the `codex-tui` path instead only when publishing the standalone TUI
+artifact.
 
 ## Final validation
 
@@ -114,12 +123,18 @@ just bazel-lock-update
 just test -p codex-config
 just test -p codex-feedback
 just test -p codex-login
+just test -p codex-aws-auth
 just test -p codex-model-provider
 just test -p codex-rmcp-client
 just test -p codex-tui
 just fix
 just fmt
-shellcheck scripts/solaris/*.sh scripts/solaris/ld.lld
+shellcheck \
+  scripts/solaris/*.sh \
+  scripts/solaris/ld.lld \
+  scripts/solaris/clangd/*.sh \
+  scripts/solaris/cross/*.sh \
+  scripts/solaris/cross/bin/*
 git diff --check
 gitleaks dir scripts/solaris --no-banner --redact
 git diff | gitleaks stdin --no-banner --redact

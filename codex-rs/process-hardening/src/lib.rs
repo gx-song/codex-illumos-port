@@ -16,9 +16,13 @@ pub fn pre_main_hardening() {
     #[cfg(target_os = "macos")]
     pre_main_hardening_macos();
 
-    // On FreeBSD and OpenBSD, apply similar hardening to Linux/macOS:
-    #[cfg(any(target_os = "freebsd", target_os = "openbsd"))]
-    pre_main_hardening_bsd();
+    #[cfg(any(
+        target_os = "freebsd",
+        target_os = "illumos",
+        target_os = "openbsd",
+        target_os = "solaris"
+    ))]
+    pre_main_hardening_unix();
 
     #[cfg(windows)]
     pre_main_hardening_windows();
@@ -30,14 +34,7 @@ const PRCTL_FAILED_EXIT_CODE: i32 = 5;
 #[cfg(target_os = "macos")]
 const PTRACE_DENY_ATTACH_FAILED_EXIT_CODE: i32 = 6;
 
-#[cfg(any(
-    target_os = "linux",
-    target_os = "android",
-    target_os = "macos",
-    target_os = "freebsd",
-    target_os = "netbsd",
-    target_os = "openbsd"
-))]
+#[cfg(unix)]
 const SET_RLIMIT_CORE_FAILED_EXIT_CODE: i32 = 7;
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -71,9 +68,15 @@ pub fn disable_process_dumping() -> std::io::Result<()> {
     }
 }
 
-#[cfg(any(target_os = "freebsd", target_os = "openbsd"))]
-pub(crate) fn pre_main_hardening_bsd() {
-    // FreeBSD/OpenBSD: set RLIMIT_CORE to 0 and clear LD_* env vars
+#[cfg(any(
+    target_os = "freebsd",
+    target_os = "illumos",
+    target_os = "openbsd",
+    target_os = "solaris"
+))]
+pub(crate) fn pre_main_hardening_unix() {
+    // These Unix targets support the portable hardening steps but not the
+    // platform-specific ptrace controls used above.
     set_core_file_size_limit_to_zero();
 
     remove_env_vars_with_prefix(b"LD_");

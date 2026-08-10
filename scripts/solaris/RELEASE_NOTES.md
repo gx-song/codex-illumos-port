@@ -4,6 +4,10 @@ This is an unofficial, experimental build of the standalone Codex terminal UI
 for 64-bit x86 illumos systems. It is not an OpenAI-supported illumos or
 Solaris release.
 
+This file describes the historical Preview 2 artifact. The current source tree
+can build a newer full CLI with additional experimental capabilities, including
+Amazon Bedrock and IDE IPC; see `scripts/solaris/README.md`.
+
 ## Build provenance
 
 - Release tag: `illumos-preview-2`

@@ -670,7 +670,7 @@ impl FeedbackSnapshot {
         options: FeedbackUploadOptions<'_>,
         _http_client_factory: &HttpClientFactory,
     ) -> Result<()> {
-        let _ = options;
+        let _ = (&self.bytes, &self.tags, options);
         Err(anyhow!(
             "feedback upload is unsupported on illumos and Solaris"
         ))

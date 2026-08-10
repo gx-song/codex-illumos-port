@@ -853,6 +853,7 @@ async fn plugin_install_tracks_analytics_when_marketplace_file_cannot_be_read() 
             remote_marketplace_name: None,
             install_attempt_id: None,
             plugin_name: "sample-plugin".to_string(),
+            install_attempt_id: None,
         })
         .await?;
     let err = timeout(

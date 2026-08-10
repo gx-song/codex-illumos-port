@@ -6,8 +6,11 @@ use tempfile::Builder;
 #[derive(Debug, Clone)]
 pub enum PasteImageError {
     ClipboardUnavailable(String),
+    #[cfg(not(any(target_os = "android", target_os = "illumos", target_os = "solaris")))]
     NoImage(String),
+    #[cfg(not(any(target_os = "android", target_os = "illumos", target_os = "solaris")))]
     EncodeFailed(String),
+    #[cfg(not(any(target_os = "android", target_os = "illumos", target_os = "solaris")))]
     IoError(String),
 }
 
@@ -15,8 +18,11 @@ impl std::fmt::Display for PasteImageError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             PasteImageError::ClipboardUnavailable(msg) => write!(f, "clipboard unavailable: {msg}"),
+            #[cfg(not(any(target_os = "android", target_os = "illumos", target_os = "solaris")))]
             PasteImageError::NoImage(msg) => write!(f, "no image on clipboard: {msg}"),
+            #[cfg(not(any(target_os = "android", target_os = "illumos", target_os = "solaris")))]
             PasteImageError::EncodeFailed(msg) => write!(f, "could not encode image: {msg}"),
+            #[cfg(not(any(target_os = "android", target_os = "illumos", target_os = "solaris")))]
             PasteImageError::IoError(msg) => write!(f, "io error: {msg}"),
         }
     }
@@ -107,12 +113,6 @@ pub fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageErro
             encoded_format: EncodedImageFormat::Png,
         },
     ))
-}
-
-/// Android/Termux, illumos, and Solaris do not support arboard; return a clear error.
-#[cfg(any(target_os = "android", target_os = "illumos", target_os = "solaris"))]
-pub fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageError> {
-    Err(unsupported_image_paste_error())
 }
 
 /// Convenience: write to a temp file and return its path + info.
@@ -229,7 +229,6 @@ fn try_dump_windows_clipboard_image() -> Option<String> {
 
 #[cfg(any(target_os = "android", target_os = "illumos", target_os = "solaris"))]
 pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImageError> {
-    // Keep error consistent with paste_image_as_png.
     Err(unsupported_image_paste_error())
 }
 
