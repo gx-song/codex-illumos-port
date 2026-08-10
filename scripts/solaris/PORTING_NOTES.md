@@ -1,6 +1,6 @@
 # illumos/Solaris Porting Notes
 
-These notes describe the source changes required by the standalone TUI port.
+These notes describe the source changes required by the illumos/Solaris port.
 They are intended for code review and rebasing onto newer Codex revisions.
 
 The build script executes Cargo from `codex-rs` so the repository's
@@ -8,14 +8,20 @@ The build script executes Cargo from `codex-rs` so the repository's
 
 ## Build scope
 
-The build command selects:
+The default build command selects:
 
 ```text
 -p codex-tui --bin codex-tui
 ```
 
-This avoids building the multipurpose CLI and `codex-code-mode-host`, but it
-does not remove the TUI's normal internal dependencies. In particular,
+Setting `CODEX_BUILD_FULL_CLI=1` instead selects:
+
+```text
+-p codex-cli --bin codex
+```
+
+Neither mode builds `codex-code-mode-host`. The standalone build does not
+remove the TUI's normal internal dependencies. In particular,
 `codex-app-server-client`, `codex-app-server-protocol`, `codex-exec-server`,
 and `codex-core` remain part of the dependency graph.
 
@@ -48,10 +54,9 @@ The following dependencies are excluded on illumos/Solaris:
 - `arboard`, because native clipboard backends are unavailable
 - `webbrowser`, because automatic desktop browser launch is unavailable
 - Sentry upload dependencies
-- Amazon Bedrock authentication dependencies
 
-The corresponding Rust APIs remain present and return explicit unsupported
-errors where callers require a stable interface.
+The corresponding clipboard, browser, and feedback APIs remain present and
+return explicit unsupported errors where callers require a stable interface.
 
 ## Platform adaptations
 
@@ -79,9 +84,16 @@ unsupported error on illumos/Solaris.
 
 ### Amazon Bedrock
 
-The Bedrock provider is replaced by a small unsupported provider
-implementation so the common provider API remains exhaustive without compiling
-the unsupported AWS authentication stack.
+The full Amazon Bedrock provider and `codex-aws-auth` dependency compile on
+illumos/Solaris. The provider supports managed Bedrock bearer credentials,
+`AWS_BEARER_TOKEN_BEDROCK`, and the AWS SDK default credential chain. SigV4
+requests use the `bedrock-mantle` service name.
+
+Set `HOME` and a supported region explicitly on SSH hosts. Outside EC2, use
+`AWS_EC2_METADATA_DISABLED=true` to avoid waiting for IMDS when credentials are
+missing. The AWS credential chain and one real signed request must be validated
+on the target host because cross-compilation alone cannot verify runtime
+credential providers or TLS trust.
 
 ### MCP OAuth
 
@@ -103,8 +115,8 @@ show_tooltips = false
 ## Standalone command subset
 
 The normal multipurpose CLI owns the non-interactive and session-management
-subcommands. Because this port ships `codex-tui` directly, its binary entry
-point adds the compatible subset:
+subcommands. When this port ships `codex-tui` directly, its binary entry point
+adds the compatible subset:
 
 ```text
 codex resume [SESSION_ID]
@@ -133,7 +145,13 @@ only expose the commands shipped by this port.
 `build-tui.sh` configures Cargo target variables for Clang, Clang++, LLVM AR,
 LLVM ranlib, and the linker wrapper.
 
-`clang-solaris.sh` and `clangxx-solaris.sh`:
+The reusable environment under `scripts/solaris/cross` discovers the sysroot,
+host LLVM tools, LLD, and a complete target GCC installation. It exports
+standard C/C++ build variables and a generic CMake toolchain. The top-level
+`clang-solaris.sh`, `clangxx-solaris.sh`, and `ld.lld` files remain as
+compatibility entries.
+
+The compiler wrappers:
 
 - select the Solaris 2.11 ABI
 - apply the copied sysroot
@@ -142,9 +160,15 @@ LLVM ranlib, and the linker wrapper.
 - add target system and GCC runtime search paths
 - embed the target GCC runtime path
 
-`ld.lld` translates the Solaris options emitted by Clang into LLD equivalents,
-including `-64`, `-G`, `-h`, `-R`, selected `-z` values, and startup object
-names.
+`cross/bin/ld.lld` translates the Solaris options emitted by Clang into LLD
+equivalents, including `-64`, `-G`, `-h`, `-R`, selected `-z` values, and
+startup object names.
+
+The generic CMake toolchain enables PIC before feature checks. Without early
+PIC, LLD rejects address-taking probes against protected Solaris libc symbols
+and projects such as LLVM incorrectly configure functions including
+`getpagesize` and `posix_spawn` as unavailable. The standalone `clangd` build
+under `scripts/solaris/clangd` consumes this same toolchain.
 
 ## Runtime limitations
 
@@ -155,8 +179,10 @@ The following are platform limitations, not gateway failures:
 - no automatic browser launch
 - no silent browser-based MCP OAuth
 - no Sentry upload
-- no Amazon Bedrock provider
-- no IDE IPC integration
+
+Amazon Bedrock and IDE IPC are compiled for illumos/Solaris but require native
+target validation. IDE IPC uses `getpeerucred` to reject peers owned by a
+different user.
 
 The self-hosted gateway independently determines whether Responses streaming,
 tool calls, model catalogs, and hosted web search work.
@@ -165,7 +191,9 @@ tool calls, model catalogs, and hosted web search work.
 
 When rebasing onto a newer Codex commit:
 
-1. Re-run `cargo tree -p codex-tui --target x86_64-unknown-illumos`.
+1. Re-run `cargo tree -p codex-tui --target x86_64-unknown-illumos` and, when
+   shipping the full CLI, `cargo tree -p codex-cli --target
+   x86_64-unknown-illumos`.
 2. Check whether upstream dependencies have gained native illumos support.
 3. Keep target-specific `cfg` blocks narrow and preserve other platforms'
    dependency features.

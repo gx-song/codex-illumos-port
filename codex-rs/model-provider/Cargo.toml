@@ -15,6 +15,7 @@ workspace = true
 [dependencies]
 codex-api = { workspace = true }
 codex-agent-identity = { workspace = true }
+codex-aws-auth = { workspace = true }
 codex-http-client = { workspace = true }
 codex-feedback = { workspace = true }
 codex-login = { workspace = true }
@@ -26,9 +27,6 @@ codex-response-debug-context = { workspace = true }
 http = { workspace = true }
 tokio = { workspace = true, features = ["sync", "time"] }
 tracing = { workspace = true, features = ["log"] }
-
-[target.'cfg(not(any(target_os = "illumos", target_os = "solaris")))'.dependencies]
-codex-aws-auth = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

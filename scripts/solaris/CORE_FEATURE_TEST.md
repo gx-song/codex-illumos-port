@@ -185,13 +185,36 @@ The current port intentionally reports these as unsupported:
 - automatic browser launch and browser-based OpenAI login
 - silent MCP OAuth browser login
 - Sentry feedback upload
-- Amazon Bedrock provider
-- IDE IPC integration
 
 Text copy through OSC52/tmux, local shell execution, file operations,
 `apply_patch`, approvals, Responses streaming, web search, and session resume
 remain in scope. Non-interactive `exec`, `exec review`, and completion
 generation are also supported.
+
+## Target-specific experimental checks
+
+Amazon Bedrock and IDE IPC compile on illumos/Solaris but require native target
+validation.
+
+For Bedrock, use an isolated AWS profile and a model available to that account:
+
+```sh
+export AWS_PROFILE="codex-bedrock"
+export AWS_REGION="us-east-1"
+export AWS_EC2_METADATA_DISABLED=true
+export BEDROCK_MODEL="<available-bedrock-model-id>"
+
+codex exec \
+  -c 'model_provider="amazon-bedrock"' \
+  -m "$BEDROCK_MODEL" \
+  "Reply exactly: OK"
+```
+
+PASS requires a successful signed request and the exact model response. Repeat
+with temporary session credentials to verify `x-amz-security-token` handling.
+
+For IDE IPC, connect from the expected desktop SSH flow and confirm that a
+same-user peer succeeds. A peer owned by another UID must be rejected.
 
 ## Diagnostics
 

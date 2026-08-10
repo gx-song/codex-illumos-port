@@ -1,12 +1,14 @@
-# Standalone Codex TUI for illumos/Solaris
+# Codex for illumos/Solaris
 
 This directory contains an experimental cross-build path for running the Codex
-terminal UI on a 64-bit x86 illumos or Solaris host over SSH.
+CLI or standalone terminal UI on a 64-bit x86 illumos or Solaris host over SSH.
 
-It builds the standalone `codex-tui` binary, deployed under the shorter
-`codex` name. It does not build the multipurpose `codex` CLI or the V8-backed
-`codex-code-mode-host` executable. The standalone entry point also exposes the
-compatible `resume`, `exec`, `exec review`, and `completion` commands.
+统一的中文使用流程见 [USAGE.zh-CN.md](USAGE.zh-CN.md)。
+
+By default, `build-tui.sh` builds the standalone `codex-tui` binary. Set
+`CODEX_BUILD_FULL_CLI=1` to build the multipurpose `codex` CLI required by
+desktop SSH remote connections. Neither mode builds the V8-backed
+`codex-code-mode-host` executable.
 
 The TUI still uses Codex core, exec-server, app-server client/protocol, and
 other internal crates. The goal is a working SSH TUI, not a new minimal Codex
@@ -14,17 +16,19 @@ architecture.
 
 ## Status
 
-The following combination was verified on August 3, 2026:
+The following combination was verified on August 10, 2026:
 
 | Component | Tested value |
 | --- | --- |
-| Codex base commit | `4642370542739d5dd080b0c87a9de06a6435d3db` |
+| Upstream Codex commit | `8cabf5a6cf` |
+| Local merge commit | `f074778bd6` |
+| Codex version | `0.148.0-alpha.5+illumos.8cabf5a6cf` |
 | Rust target | `x86_64-unknown-illumos` |
 | Rust | `1.95.0`, pinned by `codex-rs/rust-toolchain.toml` |
 | LLVM and LLD | `22.1.8` from Homebrew |
 | `pkgconf` | `3.0.4` from Homebrew |
 | Runtime OS | OmniOS r151058, amd64 |
-| Stripped binary | approximately 54 MiB |
+| Stripped full CLI | approximately 92 MiB |
 
 Oracle Solaris can use Rust's `x86_64-pc-solaris` target, but that path has not
 been validated by this work.
@@ -33,11 +37,13 @@ been validated by this work.
 
 | File | Purpose |
 | --- | --- |
-| `build-tui.sh` | Builds and strips the standalone TUI |
+| `build-tui.sh` | Builds and strips the standalone TUI or full CLI |
 | `fetch-sysroot.sh` | Copies headers, libraries, and GCC runtime files from the target |
-| `clang-solaris.sh` | C compiler and linker driver wrapper |
-| `clangxx-solaris.sh` | C++ compiler and linker driver wrapper |
-| `ld.lld` | Translates Solaris linker arguments for LLD |
+| `cross/` | Reusable C/C++ environment, compiler wrappers, and CMake toolchain |
+| `clang-solaris.sh` | Compatibility entry for the reusable C compiler wrapper |
+| `clangxx-solaris.sh` | Compatibility entry for the reusable C++ compiler wrapper |
+| `ld.lld` | Compatibility entry for the reusable LLD argument translator |
+| `clangd/` | Standalone LLVM/clangd cross-build environment |
 | `config.toml` | Redacted self-hosted Responses gateway example |
 | `remote-smoke-test.sh` | Non-destructive remote deployment checks |
 | `CORE_FEATURE_TEST.md` | Interactive SSH TUI test matrix |
@@ -60,6 +66,27 @@ Install the local cross-build tools:
 brew install llvm lld pkgconf
 (cd codex-rs && rustup target add x86_64-unknown-illumos)
 ```
+
+Building `clangd` additionally requires:
+
+```sh
+brew install cmake ninja
+```
+
+See [clangd/README.md](clangd/README.md) for the standalone CMake/Ninja build.
+
+For ordinary C and C++ projects, configure the reusable environment:
+
+```sh
+export SOLARIS_SYSROOT="$HOME/.cache/codex/solaris-sysroot"
+scripts/solaris/cross/install.sh
+eval "$(solaris-cross-env)"
+```
+
+This installs the tools under `$HOME/.local` and exports `CC`, `CXX`, Cargo
+linker variables, LLVM binutils, pkg-config sysroot variables, and
+`SOLARIS_CMAKE_TOOLCHAIN_FILE`. See [cross/README.md](cross/README.md) for
+direct compiler, CMake, Rust, and remote validation examples.
 
 `build-tui.sh` runs Cargo from `codex-rs`, so rustup automatically selects the
 repository-pinned toolchain. Verify it before publishing a binary:
@@ -123,12 +150,23 @@ removed.
 
 ## Build
 
+Build the full CLI used by the deployment steps below:
+
 ```sh
 export SOLARIS_SYSROOT="$HOME/.cache/codex/solaris-sysroot"
-scripts/solaris/build-tui.sh x86_64-unknown-illumos
+CODEX_BUILD_FULL_CLI=1 \
+  scripts/solaris/build-tui.sh x86_64-unknown-illumos
 ```
 
-Output:
+```text
+codex-rs/target/x86_64-unknown-illumos/release/codex
+```
+
+Build only the standalone TUI:
+
+```sh
+scripts/solaris/build-tui.sh x86_64-unknown-illumos
+```
 
 ```text
 codex-rs/target/x86_64-unknown-illumos/release/codex-tui
@@ -136,16 +174,17 @@ codex-rs/target/x86_64-unknown-illumos/release/codex-tui
 
 The build script uses:
 
+- the detected online CPU count for Cargo jobs and codegen units
 - `opt-level=z`
-- fat LTO
-- one codegen unit
+- thin LTO
 - `panic=abort`
 - no release debug information
 - final target-only `llvm-strip --strip-all`
 
-These settings reduce deployment size but make the final local link slower and
-more memory-intensive. `panic=abort` also disables Rust panic unwinding and
-normal panic backtraces.
+These settings keep the build parallel while retaining size optimization.
+`panic=abort` also disables Rust panic unwinding and normal panic backtraces.
+Set `CARGO_PROFILE_RELEASE_LTO=fat` when minimum artifact size is more important
+than build parallelism.
 
 For a diagnostic build with symbols and line tables:
 
@@ -153,19 +192,22 @@ For a diagnostic build with symbols and line tables:
 NO_STRIP=1 scripts/solaris/build-tui.sh x86_64-unknown-illumos
 ```
 
-The release profile can be overridden through Cargo profile environment
-variables such as `CARGO_PROFILE_RELEASE_LTO`.
+Override parallelism with `CARGO_BUILD_JOBS` and
+`CARGO_PROFILE_RELEASE_CODEGEN_UNITS`. Other release settings can be overridden
+through Cargo profile environment variables such as
+`CARGO_PROFILE_RELEASE_LTO`.
 
 ## Cross-linker design
 
-Rust invokes the included Clang wrapper for C dependencies and the final link.
+Rust invokes the reusable Clang wrapper under `cross/bin` for C dependencies
+and the final link.
 For the illumos Rust target, the wrapper uses Clang's
 `x86_64-pc-solaris2.11` frontend ABI because the Darwin-hosted illumos driver
 otherwise emits macOS linker options.
 
-The `ld.lld` wrapper translates the Solaris driver arguments used by this
-build, selects the amd64 startup objects from the sysroot, adds the target GCC
-runtime, and sets:
+The reusable `cross/bin/ld.lld` wrapper translates the Solaris driver arguments
+used by this build, selects the amd64 startup objects from the sysroot, adds
+the target GCC runtime, and sets:
 
 ```text
 /lib/amd64/ld.so.1
@@ -186,19 +228,33 @@ ssh -J "$SOLARIS_SSH_PROXY_JUMP" "$TARGET_SSH" \
   'mkdir -p "$HOME/.local/bin"'
 ```
 
-Copy the binary:
+Record the expected version and checksum, then copy the binary:
 
 ```sh
+artifact=codex-rs/target/x86_64-unknown-illumos/release/codex
+export CODEX_EXPECTED_VERSION='codex-cli 0.148.0-alpha.5+illumos.8cabf5a6cf'
+export CODEX_EXPECTED_SHA256="$(shasum -a 256 "$artifact" | awk '{print $1}')"
+
 scp -o "ProxyJump=$SOLARIS_SSH_PROXY_JUMP" \
-  codex-rs/target/x86_64-unknown-illumos/release/codex-tui \
-  "$TARGET_SSH:.local/bin/codex"
+  "$artifact" \
+  "$TARGET_SSH:.local/bin/codex.new"
+
+ssh -J "$SOLARIS_SSH_PROXY_JUMP" "$TARGET_SSH" \
+  'chmod 755 "$HOME/.local/bin/codex.new"'
 ```
 
-Set its mode:
+Verify the temporary upload before replacing the installed binary. This checks
+the exact version, SHA-256, dynamic libraries, and the full CLI-only
+`app-server` command:
 
 ```sh
+CODEX_REMOTE_BIN=.local/bin/codex.new \
+CODEX_EXPECT_FULL_CLI=1 \
+SOLARIS_SSH_PROXY_JUMP="$SOLARIS_SSH_PROXY_JUMP" \
+  scripts/solaris/remote-smoke-test.sh "$TARGET_SSH"
+
 ssh -J "$SOLARIS_SSH_PROXY_JUMP" "$TARGET_SSH" \
-  'chmod 755 "$HOME/.local/bin/codex"'
+  'mv "$HOME/.local/bin/codex.new" "$HOME/.local/bin/codex"'
 ```
 
 When no jump host is required, omit `-J` and the `ProxyJump` option.
@@ -238,6 +294,34 @@ call forms used by Codex. A Chat Completions-only endpoint is insufficient.
 
 Live web search is a Responses hosted tool. If the gateway does not implement
 it, set `web_search = "disabled"` and omit `--search`.
+
+## Configure Amazon Bedrock
+
+The illumos build includes the Amazon Bedrock provider. Select it in
+`config.toml`:
+
+```toml
+model_provider = "amazon-bedrock"
+
+[model_providers.amazon-bedrock.aws]
+profile = "codex-bedrock"
+region = "us-east-1"
+```
+
+The provider also accepts the AWS SDK default credential and region chains.
+For a non-EC2 illumos host, set a usable home directory and disable IMDS
+probing so missing credentials fail promptly:
+
+```sh
+export HOME="/export/home/$USER"
+export AWS_PROFILE="codex-bedrock"
+export AWS_REGION="us-east-1"
+export AWS_EC2_METADATA_DISABLED=true
+```
+
+Bedrock support is experimental on this port. Validate the selected profile,
+region, session token handling, TLS trust, and one real signed request on the
+target host before publishing a binary.
 
 ## Validate
 

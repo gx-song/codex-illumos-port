@@ -216,7 +216,7 @@ fn is_wsl_session() -> bool {
     false
 }
 
-/// Run arboard with stderr suppressed.
+/// Copy text through arboard.
 ///
 /// On macOS, `arboard::Clipboard::new()` initializes `NSPasteboard` which
 /// triggers `os_log` / `NSLog` output on stderr. Because the TUI owns the
@@ -234,6 +234,7 @@ fn arboard_copy(text: &str) -> Result<Option<ClipboardLease>, String> {
         .get_or_init(|| std::sync::Mutex::new(()))
         .lock()
         .map_err(|_| "stderr suppression lock poisoned".to_string())?;
+    #[cfg(target_os = "macos")]
     let _guard = SuppressStderr::new();
     let mut clipboard =
         arboard::Clipboard::new().map_err(|e| format!("clipboard unavailable: {e}"))?;
@@ -243,14 +244,13 @@ fn arboard_copy(text: &str) -> Result<Option<ClipboardLease>, String> {
     Ok(None)
 }
 
-/// Run arboard with stderr suppressed.
+/// Copy text through arboard.
 ///
 /// On Linux/X11 and some Wayland setups, clipboard contents are served by the
 /// process that last wrote them. Keep the `Clipboard` alive so the copied text
 /// remains pasteable while the TUI is running.
 #[cfg(target_os = "linux")]
 fn arboard_copy(text: &str) -> Result<Option<ClipboardLease>, String> {
-    let _guard = SuppressStderr::new();
     let mut clipboard =
         arboard::Clipboard::new().map_err(|e| format!("clipboard unavailable: {e}"))?;
     clipboard
@@ -451,16 +451,6 @@ impl Drop for SuppressStderr {
                 libc::close(saved);
             }
         }
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-struct SuppressStderr;
-
-#[cfg(not(target_os = "macos"))]
-impl SuppressStderr {
-    fn new() -> Self {
-        Self
     }
 }
 

@@ -147,6 +147,7 @@ pub async fn perform_oauth_login_silent(
             callback_port,
             callback_url,
             http_client,
+            redirect_mode,
         );
         bail!("silent MCP OAuth login is unsupported on illumos and Solaris");
     }

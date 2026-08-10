@@ -501,7 +501,7 @@ impl FeedbackSnapshot {
     /// Return an unsupported error because Sentry uploads are not built on illumos or Solaris.
     #[cfg(any(target_os = "illumos", target_os = "solaris"))]
     pub fn upload_feedback(&self, options: FeedbackUploadOptions<'_>) -> Result<()> {
-        let _ = options;
+        let _ = (&self.bytes, &self.tags, options);
         Err(anyhow!(
             "feedback upload is unsupported on illumos and Solaris"
         ))

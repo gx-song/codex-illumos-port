@@ -19,7 +19,6 @@ use codex_protocol::account::ProviderAccount;
 use codex_protocol::error::CodexErr;
 use codex_protocol::openai_models::ModelsResponse;
 
-#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 use crate::amazon_bedrock::AmazonBedrockModelProvider;
 use crate::auth::ProviderAuthScope;
 use crate::auth::ResolvedProviderAuth;
@@ -268,104 +267,11 @@ pub fn create_model_provider(
     provider_info: ModelProviderInfo,
     auth_manager: Option<Arc<AuthManager>>,
 ) -> SharedModelProvider {
-    #[cfg(any(target_os = "illumos", target_os = "solaris"))]
     if provider_info.is_amazon_bedrock() {
-        return Arc::new(UnsupportedAmazonBedrockModelProvider::new(provider_info));
+        Arc::new(AmazonBedrockModelProvider::new(provider_info, auth_manager))
+    } else {
+        Arc::new(ConfiguredModelProvider::new(provider_info, auth_manager))
     }
-
-    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
-    if provider_info.is_amazon_bedrock() {
-        return Arc::new(AmazonBedrockModelProvider::new(provider_info, auth_manager));
-    }
-
-    Arc::new(ConfiguredModelProvider::new(provider_info, auth_manager))
-}
-
-#[cfg(any(target_os = "illumos", target_os = "solaris"))]
-#[derive(Clone, Debug)]
-struct UnsupportedAmazonBedrockModelProvider {
-    info: ModelProviderInfo,
-}
-
-#[cfg(any(target_os = "illumos", target_os = "solaris"))]
-impl UnsupportedAmazonBedrockModelProvider {
-    fn new(info: ModelProviderInfo) -> Self {
-        Self { info }
-    }
-}
-
-#[cfg(any(target_os = "illumos", target_os = "solaris"))]
-impl ModelProvider for UnsupportedAmazonBedrockModelProvider {
-    fn info(&self) -> &ModelProviderInfo {
-        &self.info
-    }
-
-    fn capabilities(&self) -> ProviderCapabilities {
-        ProviderCapabilities {
-            namespace_tools: false,
-            image_generation: false,
-            web_search: false,
-        }
-    }
-
-    fn auth_manager(&self) -> Option<Arc<AuthManager>> {
-        None
-    }
-
-    fn auth(&self) -> ModelProviderFuture<'_, Option<CodexAuth>> {
-        Box::pin(async { None })
-    }
-
-    fn account_state(&self) -> ProviderAccountResult {
-        Ok(ProviderAccountState {
-            account: None,
-            requires_openai_auth: false,
-        })
-    }
-
-    fn api_provider(&self) -> ModelProviderFuture<'_, codex_protocol::error::Result<Provider>> {
-        Box::pin(async { Err(unsupported_amazon_bedrock_error()) })
-    }
-
-    fn runtime_base_url(
-        &self,
-    ) -> ModelProviderFuture<'_, codex_protocol::error::Result<Option<String>>> {
-        Box::pin(async { Err(unsupported_amazon_bedrock_error()) })
-    }
-
-    fn api_auth(
-        &self,
-    ) -> ModelProviderFuture<'_, codex_protocol::error::Result<SharedAuthProvider>> {
-        Box::pin(async { Err(unsupported_amazon_bedrock_error()) })
-    }
-
-    fn models_manager(
-        &self,
-        _codex_home: PathBuf,
-        _config_model_catalog: Option<ModelsResponse>,
-    ) -> SharedModelsManager {
-        Arc::new(StaticModelsManager::new(
-            /*auth_manager*/ None,
-            ModelsResponse::default(),
-        ))
-    }
-
-    fn models_manager_without_cache(
-        &self,
-        _config_model_catalog: Option<ModelsResponse>,
-    ) -> SharedModelsManager {
-        Arc::new(StaticModelsManager::new(
-            /*auth_manager*/ None,
-            ModelsResponse::default(),
-        ))
-    }
-}
-
-#[cfg(any(target_os = "illumos", target_os = "solaris"))]
-fn unsupported_amazon_bedrock_error() -> CodexErr {
-    CodexErr::UnsupportedOperation(
-        "Amazon Bedrock is not supported on illumos or Solaris".to_string(),
-    )
 }
 
 /// Runtime model provider backed by configured `ModelProviderInfo`.
@@ -560,7 +466,6 @@ mod tests {
     use codex_http_client::OutboundProxyPolicy;
     use codex_login::auth::AgentIdentityAuthPolicy;
     use codex_login::auth::BedrockApiKeyAuth;
-    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
     use codex_model_provider_info::ModelProviderAwsAuthInfo;
     use codex_model_provider_info::WireApi;
     use codex_model_provider_info::create_oss_provider_with_base_url;
@@ -793,7 +698,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
     fn create_model_provider_does_not_use_openai_auth_manager_for_amazon_bedrock_provider() {
         let provider = create_model_provider(
             ModelProviderInfo::create_amazon_bedrock_provider(Some(ModelProviderAwsAuthInfo {
@@ -809,7 +713,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
     async fn create_model_provider_uses_managed_auth_for_amazon_bedrock_provider() {
         let auth = bedrock_api_key_auth();
         let provider = create_model_provider(
@@ -911,7 +814,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
     fn amazon_bedrock_provider_returns_bedrock_account_state() {
         let provider = create_model_provider(
             ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
@@ -930,7 +832,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
     async fn amazon_bedrock_provider_creates_static_models_manager() {
         let provider = create_model_provider(
             ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
@@ -1000,7 +901,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
     async fn configured_bedrock_catalog_only_allows_default_service_tier() {
         let configured_model = codex_models_manager::bundled_models_response()
             .expect("bundled models should parse")
