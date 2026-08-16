@@ -14,6 +14,24 @@ target_os="${SOLARIS_TARGET_OS:-}"
 if [[ -z "${target_os}" && "${SOLARIS_RUST_TARGET:-}" == "x86_64-unknown-illumos" ]]; then
   target_os=illumos
 fi
+
+# Cargo build scripts and proc-macros run on the build host even during a
+# cross build, and cc-rs invokes $CC for them with an explicit host
+# --target. Pass those invocations through to the real compiler untouched
+# instead of forcing the Solaris target and sysroot onto host code.
+caller_target=""
+for arg in "$@"; do
+  case "${arg}" in
+    --target=*) caller_target="${arg#--target=}" ;;
+  esac
+done
+case "${caller_target}" in
+  ""|*solaris*|*illumos*) ;;
+  *)
+    exec "${SOLARIS_CLANG}" "$@"
+    ;;
+esac
+
 linking=1
 for arg in "$@"; do
   case "${arg}" in

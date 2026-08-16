@@ -20,10 +20,50 @@ Setting `CODEX_BUILD_FULL_CLI=1` instead selects:
 -p codex-cli --bin codex
 ```
 
-Neither mode builds `codex-code-mode-host`. The standalone build does not
-remove the TUI's normal internal dependencies. In particular,
+Neither mode builds `codex-code-mode-host` by default: the host embeds V8 (the
+`rusty_v8` crate), which has no upstream illumos/Solaris support. The standalone
+build does not remove the TUI's normal internal dependencies. In particular,
 `codex-app-server-client`, `codex-app-server-protocol`, `codex-exec-server`,
 and `codex-core` remain part of the dependency graph.
+
+### Code-mode host and V8
+
+The `v8` crate (rusty_v8) has no illumos support and publishes no prebuilt
+archives for it. This port **now produces** an illumos `codex-code-mode-host`
+by cross-building the V8 static library for `x86_64-unknown-illumos` **once**,
+vendoring the archive in this repository, and pointing the `v8` crate build
+script at it via the official `RUSTY_V8_ARCHIVE` override (plus
+`RUSTY_V8_SRC_BINDING_PATH` for the generated `src/string.rs` binding). The
+cross build uses the Linux-host toolchain wrappers under `scripts/solaris/cross`
+and a patched illumos sysroot.
+
+The one-time V8 cross build requires a Linux host with the LLVM/Clang 22
+toolchain and the illumos sysroot. Once `librusty_v8.a` is vendored, rebuilding
+`codex-code-mode-host` for illumos only needs Cargo and the archive — no Linux
+host is required at rebuild time.
+
+On Linux/macOS build hosts, `cargo build --release -p codex-code-mode-host`
+uses the published non-sandboxed `rusty_v8` release archives; upstream builds
+its sandbox-enabled V8 archives with Bazel and does not publish them. The
+port's `codex-code-mode-runtime` therefore makes `v8_enable_sandbox` an
+opt-in `v8-sandbox` feature.
+
+Source changes required for the V8 cross build (kept in the vendored V8 source
+tree, not in this repository):
+
+- `iso/math_iso.h`, `iso/stdlib_iso.h`, `math.h`, `stdlib.h`: under Clang,
+  skip the Solaris `namespace std` block so libc++ owns `std` (libc++ sources
+  stay pristine).
+- `v8/src/base/platform/platform-linux.cc`: guard `<sys/prctl.h>` and `mremap`
+  behind `!defined(__sun__)`; `RemapShared` returns `nullptr` on illumos.
+- `v8/src/base/platform/platform-posix.cc`: avoid the duplicate `madvise`
+  declaration under `V8_OS_SOLARIS && !defined(__sun__)`; provide
+  `Stack::ObtainCurrentThreadStackStart()` via `pthread_attr_get_np`.
+- `v8/src/base/platform/platform-posix-time.cc`: implement `LocalTimezone` /
+  `LocalTimeOffset` with `tzset()` / `tzname[]` / `timezone` (illumos `struct
+  tm` lacks `tm_zone` / `tm_gmtoff`).
+- `v8/src/trap-handler/handler-inside-posix.h`: accept `V8_OS_SOLARIS` for the
+  signal selection (runtime stub is empty).
 
 Further dependency removal was stopped once the executable built and passed
 runtime checks. Smaller dependency graphs are not useful if they create a
@@ -159,6 +199,11 @@ The compiler wrappers:
 - point Clang at the local LLD wrapper
 - add target system and GCC runtime search paths
 - embed the target GCC runtime path
+- pass through untouched any invocation that requests a non-Solaris
+  `--target`, because Cargo build scripts and proc-macros compile for the
+  build host even during a cross build and newer upstream revisions build
+  host-side C code (for example `libsqlite3-sys` for the state crate's
+  build script) through the globally exported `CC`
 
 `cross/bin/ld.lld` translates the Solaris options emitted by Clang into LLD
 equivalents, including `-64`, `-G`, `-h`, `-R`, selected `-z` values, and

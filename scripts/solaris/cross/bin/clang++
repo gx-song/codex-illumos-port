@@ -14,6 +14,22 @@ target_os="${SOLARIS_TARGET_OS:-}"
 if [[ -z "${target_os}" && "${SOLARIS_RUST_TARGET:-}" == "x86_64-unknown-illumos" ]]; then
   target_os=illumos
 fi
+
+# See the note in the `clang` wrapper: pass host-targeted invocations from
+# cc-rs through to the real compiler untouched.
+caller_target=""
+for arg in "$@"; do
+  case "${arg}" in
+    --target=*) caller_target="${arg#--target=}" ;;
+  esac
+done
+case "${caller_target}" in
+  ""|*solaris*|*illumos*) ;;
+  *)
+    exec "${SOLARIS_CLANGXX}" "$@"
+    ;;
+esac
+
 linking=1
 for arg in "$@"; do
   case "${arg}" in
