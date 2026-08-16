@@ -1,3 +1,4 @@
 codex-rs/app-server-protocol/schema/** linguist-generated
 codex-rs/hooks/schema/generated/** linguist-generated
 third_party/voice/sources.json text eol=lf
+scripts/solaris/vendor/librusty_v8.a filter=lfs diff=lfs merge=lfs -text

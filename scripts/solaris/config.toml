@@ -32,9 +32,9 @@ requires_openai_auth = false
 # env_key = "LOCAL_GATEWAY_API_KEY"
 
 [features]
-# The V8-backed host binary is intentionally not built for Solaris.
-code_mode = false
-code_mode_host = false
+# The V8-backed host binary is now cross-built for Solaris; enable it.
+code_mode = true
+code_mode_host = true
 
 # Disable OpenAI-hosted integrations that are not needed by the SSH TUI.
 apps = false

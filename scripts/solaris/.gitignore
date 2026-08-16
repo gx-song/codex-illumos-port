@@ -5,3 +5,9 @@ sysroot/
 *.tgz
 codex
 codex-tui
+
+# Exception: the one-time V8 static archive for codex-code-mode-host is
+# vendored here so the illumos host can be rebuilt without a Linux build host.
+!vendor/
+!vendor/librusty_v8.a
+!vendor/src_binding_prefixed.rs

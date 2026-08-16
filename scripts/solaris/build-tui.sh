@@ -146,7 +146,8 @@ if [[ -n "${target}" ]]; then
     fi
 
     if ! command -v pkg-config >/dev/null 2>&1; then
-      echo "Missing pkg-config. Install Homebrew pkgconf." >&2
+      echo "Missing pkg-config. Install it with brew (pkgconf), apt (pkg-config)," >&2
+      echo "or your platform's package manager." >&2
       exit 2
     fi
 
