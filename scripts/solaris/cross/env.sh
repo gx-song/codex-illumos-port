@@ -67,8 +67,20 @@ llvm_prefix="${LLVM_PREFIX:-}"
 if [[ -z "${llvm_prefix}" ]] && command -v brew >/dev/null 2>&1; then
   llvm_prefix="$(brew --prefix llvm)"
 fi
+if [[ -z "${llvm_prefix}" ]] && command -v llvm-config >/dev/null 2>&1; then
+  llvm_prefix="$(llvm-config --prefix)"
+fi
 if [[ -z "${llvm_prefix}" ]]; then
-  echo "Install Homebrew llvm or set LLVM_PREFIX." >&2
+  for candidate in /usr/lib/llvm-* /usr/local/llvm* /opt/llvm*; do
+    if [[ -x "${candidate}/bin/clang" ]]; then
+      llvm_prefix="${candidate}"
+      break
+    fi
+  done
+fi
+if [[ -z "${llvm_prefix}" ]]; then
+  echo "Install LLVM (brew install llvm, apt install llvm, or an official LLVM" >&2
+  echo "release tarball) or set LLVM_PREFIX." >&2
   exit 2
 fi
 llvm_prefix="$(cd "${llvm_prefix}" && pwd)"
@@ -88,8 +100,12 @@ if [[ -z "${solaris_ld}" ]]; then
   fi
   solaris_ld="${lld_bin:+${lld_bin}/ld.lld}"
 fi
+if [[ -z "${solaris_ld}" && -x "${llvm_prefix}/bin/ld.lld" ]]; then
+  solaris_ld="${llvm_prefix}/bin/ld.lld"
+fi
 if [[ -z "${solaris_ld}" || ! -x "${solaris_ld}" ]]; then
-  echo "Install Homebrew lld, set LLD_BIN, or set SOLARIS_LD." >&2
+  echo "Install lld (bundled with LLVM releases and most Linux LLVM packages)," >&2
+  echo "set LLD_BIN, or set SOLARIS_LD." >&2
   exit 2
 fi
 solaris_ld="$(cd "$(dirname "${solaris_ld}")" && pwd)/$(basename "${solaris_ld}")"

@@ -354,7 +354,11 @@ mod tests {
         }
     }
 
+    // illumos port note: only asserted when the `v8-sandbox` feature links a
+    // sandbox-enabled V8 archive; the default Cargo build uses the published
+    // non-sandboxed rusty_v8 release archives.
     #[test]
+    #[cfg(feature = "v8-sandbox")]
     fn linked_v8_has_sandbox_enabled() {
         unsafe extern "C" {
             fn v8__V8__IsSandboxEnabled() -> bool;

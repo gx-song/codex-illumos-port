@@ -55,16 +55,32 @@ been validated by this work.
 
 The build host needs:
 
-- macOS with Homebrew
+- macOS with Homebrew, or a Linux distribution with a package manager
 - the Rust toolchain selected by this repository
 - SSH access to an ABI-compatible illumos/Solaris target
 - enough local memory and disk space for a release build with fat LTO
 
-Install the local cross-build tools:
+Install the local cross-build tools on macOS:
 
 ```sh
 brew install llvm lld pkgconf
 (cd codex-rs && rustup target add x86_64-unknown-illumos)
+```
+
+On Linux, install an LLVM distribution that bundles `clang`, `ld.lld`, and the
+LLVM binutils (Debian/Ubuntu `llvm-XX` packages, an official LLVM release
+tarball, or similar), plus `pkg-config`:
+
+```sh
+sudo apt install pkg-config # and an LLVM package or tarball
+(cd codex-rs && rustup target add x86_64-unknown-illumos)
+```
+
+Set `LLVM_PREFIX` when the LLVM installation is not auto-detected (for example
+an official release tarball unpacked under `/opt`):
+
+```sh
+export LLVM_PREFIX=/path/to/llvm
 ```
 
 Building `clangd` additionally requires:
@@ -322,6 +338,28 @@ export AWS_EC2_METADATA_DISABLED=true
 Bedrock support is experimental on this port. Validate the selected profile,
 region, session token handling, TLS trust, and one real signed request on the
 target host before publishing a binary.
+
+## Code mode host
+
+`codex-code-mode-host` embeds the V8 engine (the `rusty_v8` crate), which has
+no illumos/Solaris support and no prebuilt libraries for those targets. A
+native illumos build of the host is therefore not produced by this port yet.
+
+The plan is to cross-build the V8 static library for `x86_64-unknown-illumos`
+once, vendor it in this repository, and feed it to the `v8` crate build script
+via the official `RUSTY_V8_ARCHIVE` override so the host builds natively on
+illumos without any external machine.
+
+Until that lands, disable code mode on the target to avoid fail-closed errors
+when models request code execution:
+
+```toml
+[features]
+code_mode = false
+```
+
+Optionally pin specific model catalog entries to `"tool_mode": "direct"` so a
+model can never request code mode regardless of the feature flag.
 
 ## Validate
 

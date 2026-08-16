@@ -92,14 +92,26 @@ else
   echo "Host: ${ssh_host}"
 fi
 
+# ssh joins command arguments with spaces before handing them to the remote
+# login shell, so empty-string arguments collapse and shift every later
+# positional parameter. Transport empty values as a "-" sentinel and restore
+# them on the remote side; legitimate values never equal "-".
+pack_arg() {
+  if [[ -n "$1" ]]; then
+    printf '%s' "$1"
+  else
+    printf '%s' '-'
+  fi
+}
+
 "${ssh_command[@]}" "${ssh_host}" sh -s -- \
-  "${remote_bin}" \
-  "${remote_home}" \
-  "${redact_output}" \
-  "${expected_version_name}" \
-  "${expected_version_number}" \
-  "${expected_sha256}" \
-  "${expect_full_cli}" \
+  "$(pack_arg "${remote_bin}")" \
+  "$(pack_arg "${remote_home}")" \
+  "$(pack_arg "${redact_output}")" \
+  "$(pack_arg "${expected_version_name}")" \
+  "$(pack_arg "${expected_version_number}")" \
+  "$(pack_arg "${expected_sha256}")" \
+  "$(pack_arg "${expect_full_cli}")" \
   "$@" <<'REMOTE'
 set -u
 
@@ -147,13 +159,18 @@ sha256_file() {
   fi
 }
 
-remote_bin="$(resolve_home_path "$1")"
-remote_home="$(resolve_home_path "$2")"
-redact_output="$3"
-expected_version_name="$4"
-expected_version_number="$5"
-expected_sha256="$6"
-expect_full_cli="$7"
+# Empty positional parameters arrive as "-" (see pack_arg on the local side).
+unpack_arg() {
+  if [ "$1" != "-" ]; then printf '%s\n' "$1"; fi
+}
+
+remote_bin="$(resolve_home_path "$(unpack_arg "$1")")"
+remote_home="$(resolve_home_path "$(unpack_arg "$2")")"
+redact_output="$(unpack_arg "$3")"
+expected_version_name="$(unpack_arg "$4")"
+expected_version_number="$(unpack_arg "$5")"
+expected_sha256="$(unpack_arg "$6")"
+expect_full_cli="$(unpack_arg "$7")"
 shift 7
 expected_version=""
 if [ -n "$expected_version_name" ] || [ -n "$expected_version_number" ]; then
