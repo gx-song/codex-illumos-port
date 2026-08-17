@@ -9,3 +9,14 @@ rustflags = ["-C", "link-arg=/STACK:8388608", "-C", "link-arg=/arm64hazardfree"]
 
 [target.'cfg(all(windows, target_env = "gnu"))']
 rustflags = ["-C", "link-arg=-Wl,--stack,8388608"]
+
+# illumos/Solaris cross builds: rustc does not pass --gc-sections for this
+# target by default. This is harmless for `codex` (its ~145 MiB .text is almost
+# entirely live, LTO-inlined code from the full app + static native deps such as
+# BoringSSL/aws-lc-sys, ring and tree-sitter grammars, so gc-sections only trims
+# ~1%), but it IS effective for `codex-code-mode-host`, which links the vendored
+# V8 static archive (`librusty_v8.a`, ~1800 finely-sectioned object files under
+# scripts/solaris/vendor); there --gc-sections drops the large amount of
+# unreferenced V8 code. Enable section garbage collection at the final link.
+[target.x86_64-unknown-illumos]
+rustflags = ["-C", "link-arg=-Wl,--gc-sections"]
