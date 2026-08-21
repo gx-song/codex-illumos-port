@@ -163,6 +163,30 @@ impl Connection {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
         scrub_non_inheritable_env_vars(command.as_std_mut());
+
+        #[cfg(target_os = "illumos")]
+        {
+            // On illumos the libc heap grows via `brk` from the low end of the
+            // address space, while V8 reserves large virtual ranges via mmap in
+            // the same low region. When a reservation lands directly above the
+            // brk heap, later `operator new` calls can no longer grow the heap
+            // and fail with ENOMEM, which V8 surfaces as std::bad_alloc and an
+            // abort during Isolate initialization. Routing malloc through
+            // libumem's mmap backend removes the brk heap from the equation.
+            const LIBUMEM: &str = "libumem.so";
+            let ld_preload_64 = match std::env::var("LD_PRELOAD_64") {
+                Ok(existing)
+                    if !existing.is_empty()
+                        && !existing.split_whitespace().any(|entry| entry == LIBUMEM) =>
+                {
+                    format!("{existing} {LIBUMEM}")
+                }
+                _ => LIBUMEM.to_string(),
+            };
+            command.env("LD_PRELOAD_64", ld_preload_64);
+            command.env("UMEM_OPTIONS", "backend=mmap");
+        }
+
         let mut child = command.spawn().map_err(|error| ConnectionError::Spawn {
             host_program: host_program.to_path_buf(),
             error,

@@ -175,7 +175,11 @@ fn run_runtime(
     isolate_handle_tx: std_mpsc::SyncSender<v8::IsolateHandle>,
     runtime_command_tx: std_mpsc::Sender<RuntimeCommand>,
 ) {
-    let isolate = &mut v8::Isolate::new(v8::CreateParams::default());
+    #[cfg(not(target_os = "illumos"))]
+    let create_params = v8::CreateParams::default();
+    #[cfg(target_os = "illumos")]
+    let create_params = v8::CreateParams::default().set_code_range_size_in_bytes(64 * 1024 * 1024);
+    let isolate = &mut v8::Isolate::new(create_params);
     let isolate_handle = isolate.thread_safe_handle();
     if isolate_handle_tx.send(isolate_handle).is_err() {
         return;

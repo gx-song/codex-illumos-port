@@ -42,11 +42,30 @@ pub(crate) fn ensure_v8_initialized() -> Result<(), String> {
 fn initialize_v8_with_mode(jit_mode: V8JitMode) -> Result<V8Initialization, String> {
     v8::icu::set_common_data_77(deno_core_icudata::ICU_DATA)
         .map_err(|error_code| format!("failed to initialize ICU data: {error_code}"))?;
-    match jit_mode {
-        V8JitMode::Enabled => {}
-        V8JitMode::Disabled => v8::V8::set_flags_from_string("--jitless"),
+
+    let mut flags = String::new();
+    if let V8JitMode::Disabled = jit_mode {
+        flags.push_str("--jitless");
     }
-    let platform = v8::new_default_platform(0, false).make_shared();
+
+    #[cfg(target_os = "illumos")]
+    {
+        if flags.is_empty() {
+            flags.push_str("--max-old-space-size=128");
+        } else {
+            flags.push_str(" --max-old-space-size=128");
+        }
+    }
+
+    if !flags.is_empty() {
+        v8::V8::set_flags_from_string(&flags);
+    }
+
+    #[cfg(target_os = "illumos")]
+    let worker_threads = 1;
+    #[cfg(not(target_os = "illumos"))]
+    let worker_threads = 0;
+    let platform = v8::new_default_platform(worker_threads, false).make_shared();
     v8::V8::initialize_platform(platform.clone());
     v8::V8::initialize();
     Ok(V8Initialization {
