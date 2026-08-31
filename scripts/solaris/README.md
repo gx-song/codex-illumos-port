@@ -16,19 +16,20 @@ architecture.
 
 ## Status
 
-The following combination was verified on August 10, 2026:
+The following combination was verified on August 31, 2026:
 
 | Component | Tested value |
 | --- | --- |
-| Upstream Codex commit | `8cabf5a6cf` |
-| Local merge commit | `f074778bd6` |
-| Codex version | `0.148.0-alpha.5+illumos.8cabf5a6cf` |
+| Upstream Codex commit | `d2a6bad21b` (tag `rust-v0.152.0-alpha.6`) |
+| Local port commit | `630a72c4aa` |
+| Codex version | `0.152.0-alpha.6+illumos.630a72c4aa` |
 | Rust target | `x86_64-unknown-illumos` |
 | Rust | `1.95.0`, pinned by `codex-rs/rust-toolchain.toml` |
 | LLVM and LLD | `22.1.8` from Homebrew |
 | `pkgconf` | `3.0.4` from Homebrew |
 | Runtime OS | OmniOS r151058, amd64 |
-| Stripped full CLI | approximately 92 MiB |
+| Stripped full CLI | approximately 96 MiB |
+| V8-backed code-mode host | approximately 162 MiB (unstripped) |
 
 Oracle Solaris can use Rust's `x86_64-pc-solaris` target, but that path has not
 been validated by this work.
@@ -248,7 +249,7 @@ Record the expected version and checksum, then copy the binary:
 
 ```sh
 artifact=codex-rs/target/x86_64-unknown-illumos/release/codex
-export CODEX_EXPECTED_VERSION='codex-cli 0.148.0-alpha.5+illumos.8cabf5a6cf'
+export CODEX_EXPECTED_VERSION='codex-cli 0.152.0-alpha.6+illumos.630a72c4aa'
 export CODEX_EXPECTED_SHA256="$(shasum -a 256 "$artifact" | awk '{print $1}')"
 
 scp -o "ProxyJump=$SOLARIS_SSH_PROXY_JUMP" \
