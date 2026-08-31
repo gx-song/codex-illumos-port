@@ -2,25 +2,27 @@ use std::collections::BTreeMap;
 use std::collections::VecDeque;
 #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 use std::collections::btree_map::Entry;
-#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 use std::fs;
 use std::io::Read;
 use std::io::Write;
 use std::io::{self};
-#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 use std::time::Duration;
+#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 use std::time::Instant;
 
+#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 use codex_http_client::ClientRouteClass;
 use codex_http_client::HttpClientFactory;
+#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 use codex_http_client::RouteAwareClientPool;
 use codex_login::AuthEnvTelemetry;
 use codex_protocol::ThreadId;
@@ -37,7 +39,9 @@ use tracing_subscriber::registry::LookupSpan;
 mod attachment_truncation;
 pub(crate) mod feedback_diagnostics;
 mod guardian;
+#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 mod report_upload;
+#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 mod upload;
 pub use feedback_diagnostics::FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME;
 pub use feedback_diagnostics::FeedbackDiagnostic;
@@ -45,8 +49,11 @@ pub use feedback_diagnostics::FeedbackDiagnostics;
 pub use guardian::GuardianReviewFailures;
 pub use guardian::guardian_review_failures;
 pub use guardian::record_guardian_review_failure;
+#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 pub use report_upload::FeedbackDelivery;
+#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 pub use report_upload::FeedbackTransport;
+#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 pub use report_upload::prepare_report_attachment;
 
 /// Filename used for the redacted `codex doctor --json` feedback attachment.
@@ -68,8 +75,11 @@ pub const MAX_ATTACHMENTS_BYTES: usize = 126 * 1024 * 1024;
 // Check complete envelopes against Sentry's published limits, including framing:
 // https://develop.sentry.dev/sdk/foundations/envelopes/#size-limits
 // https://docs.sentry.io/platforms/javascript/enriching-events/attachments/
+#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 const MAX_DECODED_UPLOAD_BYTES: usize = 200 * 1024 * 1024;
+#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 const MAX_EVENT_BYTES: usize = 1024 * 1024;
+#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 const MAX_UPLOAD_BYTES: usize = 40_000_000;
 const FEEDBACK_TAGS_TARGET: &str = "feedback_tags";
 const MAX_FEEDBACK_TAGS: usize = 64;
@@ -397,6 +407,7 @@ pub struct FeedbackAttachmentPath {
 
 enum AttachmentReadMode {
     Whole,
+    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
     Prefix,
 }
 
@@ -508,6 +519,7 @@ pub struct FeedbackUploadOptions<'a> {
 }
 
 impl FeedbackSnapshot {
+    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
     fn feedback_event(
         &self,
         classification: &str,

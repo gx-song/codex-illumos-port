@@ -7,6 +7,7 @@ use anyhow::Result;
 /// JSONL keeps at least one complete record when a smaller record prefix is possible,
 /// even if it exceeds the target. Callers must check the resulting upload size.
 /// Other formats use a byte prefix.
+#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 pub(super) fn truncate_attachment(
     filename: &mut String,
     buffer: &mut Vec<u8>,
