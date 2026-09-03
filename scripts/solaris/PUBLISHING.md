@@ -99,7 +99,7 @@ that userspace. If publishing it separately:
   and a third-party license report or SBOM
 
 The illumos version uses SemVer build metadata such as
-`0.152.0-alpha.6+illumos.630a72c4aa`. Publish it through the manual port release
+`0.153.0+illumos.<port-commit>`. Publish it through the manual port release
 process documented here. Do not use the upstream `rust-release.yml` workflow or
 `scripts/install/install.sh`; their version validation intentionally rejects
 this port-specific version format.
