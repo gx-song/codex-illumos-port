@@ -7,7 +7,6 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_arg0::arg0_dispatch_or_else;
 use codex_config::LoaderOverrides;
 use codex_exec::Cli as ExecCli;
-use codex_tui::AppExitInfo;
 use codex_tui::Cli;
 use codex_tui::ExitReason;
 use codex_tui::run_main;

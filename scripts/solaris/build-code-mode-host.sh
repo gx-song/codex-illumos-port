@@ -44,6 +44,25 @@ cd "${repo_root}/codex-rs"
 cross_env="$(bash "${script_dir}/cross/env.sh")"
 eval "${cross_env}"
 
+# Point openssl-sys at the sysroot headers and libraries, the same way
+# build-tui.sh does. The host binary links OpenSSL through the -sys crate.
+sysroot="${SOLARIS_SYSROOT:-${HOME}/.cache/codex/solaris-sysroot}"
+openssl_include_dir="${sysroot}/usr/include"
+openssl_libdir=""
+for candidate in "${sysroot}/usr/lib/amd64" "${sysroot}/lib/amd64"; do
+  if [[ -e "${candidate}/libssl.so" && -e "${candidate}/libcrypto.so" ]]; then
+    openssl_libdir="${candidate}"
+    break
+  fi
+done
+if [[ -z "${openssl_libdir}" ]]; then
+  echo "Sysroot is missing amd64 libssl.so and libcrypto.so." >&2
+  exit 2
+fi
+export X86_64_UNKNOWN_ILLUMOS_OPENSSL_INCLUDE_DIR="${openssl_include_dir}"
+export X86_64_UNKNOWN_ILLUMOS_OPENSSL_LIB_DIR="${openssl_libdir}"
+export AWS_LC_SYS_CMAKE_BUILDER="${AWS_LC_SYS_CMAKE_BUILDER:-0}"
+
 export RUSTY_V8_ARCHIVE="${archive}"
 export RUSTY_V8_SRC_BINDING_PATH="${binding}"
 
