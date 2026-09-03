@@ -21,8 +21,8 @@ The following combination was verified on September 4, 2026:
 | Component | Tested value |
 | --- | --- |
 | Upstream Codex commit | `41e22fee98` (tag `rust-v0.153.0`) |
-| Local port commit | `PORT_COMMIT` |
-| Codex version | `0.153.0+illumos.PORT_COMMIT` |
+| Local port commit | `073a72e2a7` |
+| Codex version | `0.153.0+illumos.073a72e2a7` |
 | Rust target | `x86_64-unknown-illumos` |
 | Rust | `1.95.0`, pinned by `codex-rs/rust-toolchain.toml` |
 | LLVM and LLD | `22.1.8` from Homebrew |
@@ -250,7 +250,7 @@ Record the expected version and checksum, then copy the binary:
 
 ```sh
 artifact=codex-rs/target/x86_64-unknown-illumos/release/codex
-export CODEX_EXPECTED_VERSION='codex-cli 0.153.0+illumos.PORT_COMMIT'
+export CODEX_EXPECTED_VERSION='codex-cli 0.153.0+illumos.073a72e2a7'
 export CODEX_EXPECTED_SHA256="$(shasum -a 256 "$artifact" | awk '{print $1}')"
 
 scp -o "ProxyJump=$SOLARIS_SSH_PROXY_JUMP" \
