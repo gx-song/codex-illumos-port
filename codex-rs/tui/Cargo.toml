@@ -152,9 +152,13 @@ syntect = "5"
 two-face = { version = "0.5", default-features = false, features = ["syntect-default-onig"] }
 webbrowser = { workspace = true }
 
+# Syntect's default Oniguruma backend is C code that does not cross-compile for
+# illumos/Solaris (it relies on `alloca`, which the target headers do not
+# declare under C99). Use the pure-Rust fancy-regex backend there instead; see
+# scripts/solaris/PORTING_NOTES.md.
 [target.'cfg(any(target_os = "illumos", target_os = "solaris"))'.dependencies]
-syntect = "5"
-two-face = { version = "0.5", default-features = false, features = ["syntect-default-onig"] }
+syntect = { version = "5", default-features = false, features = ["default-fancy"] }
+two-face = { version = "0.5", default-features = false, features = ["syntect-default-fancy"] }
 
 # Clipboard support via `arboard` is unavailable on Android/Termux, illumos, and Solaris.
 [target.'cfg(not(any(target_os = "android", target_os = "illumos", target_os = "solaris")))'.dependencies]
