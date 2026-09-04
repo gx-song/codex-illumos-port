@@ -98,11 +98,18 @@ that userspace. If publishing it separately:
 - include the repository `LICENSE`, applicable notices, a modified-source link,
   and a third-party license report or SBOM
 
-The illumos version uses SemVer build metadata such as
-`0.153.0+illumos.<port-commit>`. Publish it through the manual port release
-process documented here. Do not use the upstream `rust-release.yml` workflow or
-`scripts/install/install.sh`; their version validation intentionally rejects
-this port-specific version format.
+The release *tag* carries the port provenance, for example
+`v0.153.0-illumos.<port-commit>`. The binary itself reports the plain upstream
+version: `codex --version` prints `codex-cli 0.153.0`, because the version comes
+from `CARGO_PKG_VERSION` and the build adds no `+illumos.<port-commit>` build
+metadata. Record the port commit in the release notes and in the status table in
+`README.md` instead of encoding it in the version string; a
+`CODEX_EXPECTED_VERSION` containing `+illumos.<port-commit>` will fail the
+remote smoke test.
+
+Publish through the manual port release process documented here. Do not use the
+upstream `rust-release.yml` workflow or `scripts/install/install.sh`; their
+version validation rejects this port-specific tag format.
 
 Generate a checksum on macOS:
 
