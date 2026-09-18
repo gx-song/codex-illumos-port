@@ -99,8 +99,8 @@ that userspace. If publishing it separately:
   and a third-party license report or SBOM
 
 The release *tag* carries the port provenance, for example
-`v0.153.0-illumos.<port-commit>`. The binary itself reports the plain upstream
-version: `codex --version` prints `codex-cli 0.153.0`, because the version comes
+`v0.155.0-illumos.<port-commit>`. The binary itself reports the plain upstream
+version: `codex --version` prints `codex-cli 0.155.0`, because the version comes
 from `CARGO_PKG_VERSION` and the build adds no `+illumos.<port-commit>` build
 metadata. Record the port commit in the release notes and in the status table in
 `README.md` instead of encoding it in the version string; a

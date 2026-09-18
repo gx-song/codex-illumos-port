@@ -12,6 +12,7 @@ V8 Isolate initialized and ran without the prior std::bad_alloc abort.
 Usage:
   python3 scripts/solaris/code-mode-host-smoke.py [HOST_BINARY]
 """
+
 from __future__ import annotations
 
 import json
@@ -57,7 +58,9 @@ def read_one(proc: "subprocess.Popen[bytes]") -> dict | None:
 
 
 def main() -> int:
-    host_binary = sys.argv[1] if len(sys.argv) > 1 else ".local/bin/codex-code-mode-host"
+    host_binary = (
+        sys.argv[1] if len(sys.argv) > 1 else ".local/bin/codex-code-mode-host"
+    )
     env = dict(os.environ)
     # Mirror the fix in code-mode/src/remote_session/connection.rs.
     env["LD_PRELOAD_64"] = "libumem.so"
@@ -77,12 +80,14 @@ def main() -> int:
 
     try:
         # 1. Handshake: client hello -> host ready.
-        send({
-            "type": "connection/hello",
-            "supportedVersions": [1],
-            "requiredCapabilities": [],
-            "optionalCapabilities": ["session-cell-execution-resource-limits"],
-        })
+        send(
+            {
+                "type": "connection/hello",
+                "supportedVersions": [1],
+                "requiredCapabilities": [],
+                "optionalCapabilities": ["session-cell-execution-resource-limits"],
+            }
+        )
         hello = read_one(proc)
         log(f"DEBUG handshake: {json.dumps(hello)}")
         if hello is None or hello.get("type") != "connection/ready":
@@ -92,15 +97,20 @@ def main() -> int:
 
         session_id = "smoke-session-1"
         # 2. Open session.
-        send({
-            "type": "operation/request",
-            "id": 1,
-            "request": {
-                "method": "session/open",
-                "sessionId": session_id,
-                "cellExecutionLimits": {"maxYieldTimeMs": 5000, "maxHeapSizeBytes": 64 * 1024 * 1024},
-            },
-        })
+        send(
+            {
+                "type": "operation/request",
+                "id": 1,
+                "request": {
+                    "method": "session/open",
+                    "sessionId": session_id,
+                    "cellExecutionLimits": {
+                        "maxYieldTimeMs": 5000,
+                        "maxHeapSizeBytes": 64 * 1024 * 1024,
+                    },
+                },
+            }
+        )
         open_resp = read_one(proc)
         log(f"DEBUG open: {json.dumps(open_resp)}")
         if open_resp is None or open_resp.get("type") != "operation/response":
@@ -110,21 +120,23 @@ def main() -> int:
 
         # 3. Execute a JavaScript cell that exercises V8 Isolate init.
         js_source = "const x = 6 * 7; x;"
-        send({
-            "type": "operation/request",
-            "id": 2,
-            "request": {
-                "method": "session/execute",
-                "sessionId": session_id,
+        send(
+            {
+                "type": "operation/request",
+                "id": 2,
                 "request": {
-                    "tool_call_id": "call-1",
-                    "enabled_tools": [],
-                    "source": js_source,
-                    "yield_time_ms": 5000,
-                    "max_output_tokens": 4096,
+                    "method": "session/execute",
+                    "sessionId": session_id,
+                    "request": {
+                        "tool_call_id": "call-1",
+                        "enabled_tools": [],
+                        "source": js_source,
+                        "yield_time_ms": 5000,
+                        "max_output_tokens": 4096,
+                    },
                 },
-            },
-        })
+            }
+        )
 
         cell_id = None
         started = read_one(proc)
@@ -156,15 +168,17 @@ def main() -> int:
             return 1
 
         # 5. Wait for the cell to finish.
-        send({
-            "type": "operation/request",
-            "id": 3,
-            "request": {
-                "method": "session/wait",
-                "sessionId": session_id,
-                "request": {"cell_id": cell_id, "yield_time_ms": 5000},
-            },
-        })
+        send(
+            {
+                "type": "operation/request",
+                "id": 3,
+                "request": {
+                    "method": "session/wait",
+                    "sessionId": session_id,
+                    "request": {"cell_id": cell_id, "yield_time_ms": 5000},
+                },
+            }
+        )
         outcome = read_one(proc)
         log(f"INFO wait outcome: {json.dumps(outcome)}")
         if outcome is None or outcome.get("type") != "operation/response":
@@ -176,7 +190,9 @@ def main() -> int:
             # still proves the V8 execution completed without a crash.
             msg = wait_result.get("message", "")
             if "active observer" in msg or "already" in msg:
-                log(f"INFO: wait reports cell already finalized ({msg}); execution succeeded")
+                log(
+                    f"INFO: wait reports cell already finalized ({msg}); execution succeeded"
+                )
             else:
                 log(f"FAIL: wait returned error: {wait_result}")
                 return 1
@@ -184,9 +200,13 @@ def main() -> int:
         if value.get("type") != "wait/completed":
             log(f"INFO: wait value type is {value.get('type')} (cell already closed)")
         outcome_detail = value.get("outcome", {})
-        response = outcome_detail.get("LiveCell") or outcome_detail.get("MissingCell") or {}
+        response = (
+            outcome_detail.get("LiveCell") or outcome_detail.get("MissingCell") or {}
+        )
         content = response.get("contentItems", [])
-        text = "".join(item.get("text", "") for item in content if item.get("type") == "inputText")
+        text = "".join(
+            item.get("text", "") for item in content if item.get("type") == "inputText"
+        )
         log(f"INFO: cell output text: {text!r}")
         log("PASS: code-mode host executed JavaScript end-to-end under libumem")
         return 0

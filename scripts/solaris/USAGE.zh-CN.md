@@ -297,23 +297,28 @@ ssh pkgsrc-dev 'ldd ~/.local/bin/hello'
 
 ## 12. Code mode（V8 现状）
 
-`codex-code-mode-host` 依赖 V8 引擎（rusty_v8），没有 illumos 预编译产
-物，本 port 暂不产出 illumos 版本的该二进制。规划：为
-`x86_64-unknown-illumos` 一次性交叉构建 V8 静态库并 vendor 进仓库，通
-过官方 `RUSTY_V8_ARCHIVE` 覆盖钩子接入 v8 crate 构建脚本，使该二进制
-在 illumos 上原生编译，不依赖任何外部机器。
+`codex-code-mode-host` 依赖 V8 引擎（rusty_v8），上游没有 illumos 预编译
+产物。本 port 已一次性为 `x86_64-unknown-illumos` 交叉构建 V8 静态库并
+vendor 进仓库（`scripts/solaris/vendor/librusty_v8.a`），通过官方
+`RUSTY_V8_ARCHIVE` 与 `RUSTY_V8_SRC_BINDING_PATH` 覆盖钩子接入 v8 crate
+构建脚本，因此该二进制现在可在 illumos 上原生编译：
 
-在原生构建落地之前，目标机上应关闭 code mode，避免模型请求代码执行
-时出现 fail-closed 报错：
-
-```toml
-[features]
-code_mode = false
+```sh
+export SOLARIS_SYSROOT="$HOME/.cache/codex/solaris-sysroot"
+scripts/solaris/build-code-mode-host.sh --release
 ```
 
-还可以在 `~/.codex/model-catalog.json` 中给特定模型条目显式设置
-`"tool_mode": "direct"`，这样无论 feature 开关如何，该模型都不会请求
-code mode。
+产物为 `codex-rs/target/x86_64-unknown-illumos/release/codex-code-mode-host`，
+约 163 MiB。部署后可用崩溃回归脚本验证 V8 Isolate 能正常执行 JavaScript：
+
+```sh
+python3 scripts/solaris/code-mode-host-smoke.py \
+  "$HOME/.local/bin/codex-code-mode-host"
+```
+
+该脚本以 Codex 实际启动方式（`LD_PRELOAD_64=libumem.so` 配合
+`UMEM_OPTIONS=backend=mmap`）拉起 host 并执行一个 JS cell，用于回归
+libumem 与 V8 堆的 brk 冲突崩溃。
 
 ## 快速检查流程
 
