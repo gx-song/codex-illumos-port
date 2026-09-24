@@ -45,6 +45,10 @@ use crate::utils::build_default_headers;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
 
+#[path = "oauth_callback_input.rs"]
+mod callback_input;
+pub use callback_input::perform_oauth_login_with_callback_input;
+
 #[derive(Clone, Copy)]
 pub(crate) enum OAuthLoginPurpose {
     Mcp,
@@ -165,9 +169,11 @@ pub async fn perform_oauth_login_silent(
             env_http_headers,
             scopes,
             oauth_client_id,
+            client_registration,
             oauth_resource,
             callback_port,
             callback_url,
+            global_callback_url,
             http_client,
             redirect_mode,
         );
@@ -452,6 +458,7 @@ impl OauthLoginHandle {
 
 pub(crate) struct OauthLoginFlow {
     auth_url: String,
+    redirect_uri: String,
     oauth_state: OAuthState,
     authorization_server_issuer: Option<String>,
     rx: oneshot::Receiver<CallbackResult>,
@@ -725,6 +732,7 @@ impl OauthLoginFlow {
 
         Ok(Self {
             auth_url,
+            redirect_uri,
             oauth_state,
             authorization_server_issuer,
             rx,
@@ -776,11 +784,15 @@ impl OauthLoginFlow {
             }
         }
 
+        let callback = timeout(self.timeout, &mut self.rx)
+            .await
+            .context("timed out waiting for OAuth callback")?
+            .context("OAuth callback was cancelled")?;
+        self.complete_callback(callback).await
+    }
+
+    async fn complete_callback(mut self, callback: CallbackResult) -> Result<StoredOAuthTokens> {
         let result = async {
-            let callback = timeout(self.timeout, &mut self.rx)
-                .await
-                .context("timed out waiting for OAuth callback")?
-                .context("OAuth callback was cancelled")?;
             let OauthCallbackResult {
                 code,
                 state: csrf_state,

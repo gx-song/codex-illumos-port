@@ -16,6 +16,15 @@ architecture.
 
 ## Status
 
+The `illumos-0.156.1` branch incorporates upstream commit `b412ff32c417`
+(tag `rust-v0.156.1`). On September 24, 2026, the full CLI and
+`codex-code-mode-host` cross-built successfully for `x86_64-unknown-illumos`.
+On `pkgsrc-dev` (OmniOS r151058), the CLI printed `codex-cli 0.156.1`,
+the app-server answered `initialize` with `platformOs: illumos`; both binaries
+resolved their dynamic libraries. The code-mode host executed JavaScript and
+returned `illumos-v8-ok` under the libumem mmap backend. These checks used a
+temporary directory and did not replace the installed Codex binary.
+
 The following combination was verified on September 18, 2026:
 
 | Component | Tested value |
@@ -48,6 +57,7 @@ been validated by this work.
 | `clangd/` | Standalone LLVM/clangd cross-build environment |
 | `config.toml` | Redacted self-hosted Responses gateway example |
 | `remote-smoke-test.sh` | Non-destructive remote deployment checks |
+| `code-mode-host-smoke.py` | Runs a JavaScript cell through the host IPC protocol |
 | `CORE_FEATURE_TEST.md` | Interactive SSH TUI test matrix |
 | `PORTING_NOTES.md` | Source changes, dependency choices, and limitations |
 | `PUBLISHING.md` | Public-release and secret-removal checklist |
@@ -250,7 +260,7 @@ Record the expected version and checksum, then copy the binary:
 
 ```sh
 artifact=codex-rs/target/x86_64-unknown-illumos/release/codex
-export CODEX_EXPECTED_VERSION='codex-cli 0.155.0'
+export CODEX_EXPECTED_VERSION='codex-cli 0.156.1'
 export CODEX_EXPECTED_SHA256="$(shasum -a 256 "$artifact" | awk '{print $1}')"
 
 scp -o "ProxyJump=$SOLARIS_SSH_PROXY_JUMP" \

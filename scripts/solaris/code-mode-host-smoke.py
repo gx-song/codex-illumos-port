@@ -118,8 +118,8 @@ def main() -> int:
             return 1
         log("PASS: session opened")
 
-        # 3. Execute a JavaScript cell that exercises V8 Isolate init.
-        js_source = "const x = 6 * 7; x;"
+        # 3. Execute a JavaScript cell and verify its actual output.
+        js_source = 'text("illumos-v8-ok");'
         send(
             {
                 "type": "operation/request",
@@ -138,78 +138,47 @@ def main() -> int:
             }
         )
 
-        cell_id = None
         started = read_one(proc)
         log(f"DEBUG exec ack: {json.dumps(started)}")
-        if started is None or started.get("type") != "operation/response":
+        if (
+            started is None
+            or started.get("type") != "operation/response"
+            or started.get("id") != 2
+            or (started.get("result") or {}).get("status") != "ok"
+        ):
             log(f"FAIL: unexpected execute ack: {started}")
             return 1
-        value = (started.get("result") or {}).get("value", {})
-        if value.get("type") == "execution/started":
-            cell_id = value.get("cellId")
         log("PASS: execution started (V8 Isolate initialized without crash)")
 
-        # 4. Read runtime frames until we have the cell id (initialResponse).
+        # 4. The initial response contains the result of this short cell.
         deadline = time.time() + 30
-        while cell_id is None and time.time() < deadline:
+        while time.time() < deadline:
             msg = read_one(proc)
             if msg is None:
-                log("FAIL: timed out waiting for cell id")
+                log("FAIL: timed out waiting for JavaScript output")
                 return 1
             log(f"DEBUG msg: {json.dumps(msg)[:2000]}")
-            if msg.get("type") == "execute/initialResponse":
-                cell_id = msg.get("id")
-            elif msg.get("type") == "operation/response":
-                v = (msg.get("result") or {}).get("value", {})
-                if v.get("type") == "execution/started":
-                    cell_id = v.get("cellId")
-        if cell_id is None:
-            log("FAIL: never learned the cell id")
-            return 1
-
-        # 5. Wait for the cell to finish.
-        send(
-            {
-                "type": "operation/request",
-                "id": 3,
-                "request": {
-                    "method": "session/wait",
-                    "sessionId": session_id,
-                    "request": {"cell_id": cell_id, "yield_time_ms": 5000},
-                },
-            }
-        )
-        outcome = read_one(proc)
-        log(f"INFO wait outcome: {json.dumps(outcome)}")
-        if outcome is None or outcome.get("type") != "operation/response":
-            log(f"FAIL: unexpected wait response: {outcome}")
-            return 1
-        wait_result = outcome.get("result", {})
-        if wait_result.get("status") != "ok":
-            # A fast cell may already be closed/observed by the time we wait; that
-            # still proves the V8 execution completed without a crash.
-            msg = wait_result.get("message", "")
-            if "active observer" in msg or "already" in msg:
-                log(
-                    f"INFO: wait reports cell already finalized ({msg}); execution succeeded"
-                )
-            else:
-                log(f"FAIL: wait returned error: {wait_result}")
+            if msg.get("type") != "execute/initialResponse" or msg.get("id") != 2:
+                continue
+            result = msg.get("result") or {}
+            response = (result.get("value") or {}).get("Result") or {}
+            content = response.get("content_items") or []
+            output = "".join(
+                item.get("text", "")
+                for item in content
+                if item.get("type") == "input_text"
+            )
+            if (
+                result.get("status") != "ok"
+                or response.get("error_text") is not None
+                or output != "illumos-v8-ok"
+            ):
+                log(f"FAIL: unexpected JavaScript result: {result}")
                 return 1
-        value = wait_result.get("value", {})
-        if value.get("type") != "wait/completed":
-            log(f"INFO: wait value type is {value.get('type')} (cell already closed)")
-        outcome_detail = value.get("outcome", {})
-        response = (
-            outcome_detail.get("LiveCell") or outcome_detail.get("MissingCell") or {}
-        )
-        content = response.get("contentItems", [])
-        text = "".join(
-            item.get("text", "") for item in content if item.get("type") == "inputText"
-        )
-        log(f"INFO: cell output text: {text!r}")
-        log("PASS: code-mode host executed JavaScript end-to-end under libumem")
-        return 0
+            log(f"PASS: code-mode host executed JavaScript: {output}")
+            return 0
+        log("FAIL: timed out waiting for JavaScript output")
+        return 1
     except (EOFError, ValueError) as exc:
         stderr = proc.stderr.read().decode("utf-8", "replace") if proc.stderr else ""
         log(f"FAIL: host died during V8 execution: {exc}")
