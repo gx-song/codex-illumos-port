@@ -35,10 +35,10 @@ cd ..
 ## 2. 获取目标 sysroot
 
 目标主机需要安装开发头文件和完整的 64 位 GCC C++ runtime。以下示例使用
-SSH 别名 `pkgsrc-dev`：
+SSH 别名 `illumos-zone`：
 
 ```sh
-scripts/solaris/fetch-sysroot.sh pkgsrc-dev
+scripts/solaris/fetch-sysroot.sh illumos-zone
 ```
 
 默认保存位置：
@@ -51,7 +51,7 @@ $HOME/.cache/codex/solaris-sysroot
 
 ```sh
 scripts/solaris/fetch-sysroot.sh \
-  pkgsrc-dev \
+  illumos-zone \
   "$HOME/.cache/codex/omnios-r151058-sysroot"
 ```
 
@@ -180,7 +180,7 @@ SOLARIS_SYSROOT="$HOME/.cache/codex/solaris-sysroot" \
 
 ```sh
 SOLARIS_SYSROOT="$HOME/.cache/codex/solaris-sysroot" \
-  solaris-cross-check --ssh pkgsrc-dev
+  solaris-cross-check --ssh illumos-zone
 ```
 
 脚本会编译 C11 和 C++17 探针，检查 ELF 架构和解释器，并在远程检查
@@ -268,14 +268,14 @@ clangd 可按以下结构部署：
 示例：
 
 ```sh
-scp hello pkgsrc-dev:.local/bin/hello
-ssh pkgsrc-dev 'chmod 755 ~/.local/bin/hello && ~/.local/bin/hello'
+scp hello illumos-zone:.local/bin/hello
+ssh illumos-zone 'chmod 755 ~/.local/bin/hello && ~/.local/bin/hello'
 ```
 
 部署后检查动态库：
 
 ```sh
-ssh pkgsrc-dev 'ldd ~/.local/bin/hello'
+ssh illumos-zone 'ldd ~/.local/bin/hello'
 ```
 
 如果 `ldd` 出现 `not found`，应检查 sysroot 是否与目标主机一致，以及
@@ -326,7 +326,7 @@ libumem 与 V8 堆的 brk 冲突崩溃。
 export SOLARIS_SYSROOT="$HOME/.cache/codex/solaris-sysroot"
 
 # 验证 C/C++ 编译和远程运行
-solaris-cross-check --ssh pkgsrc-dev
+solaris-cross-check --ssh illumos-zone
 
 # 使用全部在线 CPU 构建完整 Codex CLI
 CODEX_BUILD_FULL_CLI=1 \

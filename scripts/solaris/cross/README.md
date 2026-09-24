@@ -19,7 +19,7 @@ The environment includes:
 Fetch a sysroot and install the host tools:
 
 ```sh
-scripts/solaris/fetch-sysroot.sh pkgsrc-dev
+scripts/solaris/fetch-sysroot.sh illumos-zone
 brew install llvm lld cmake ninja pkgconf
 ```
 
@@ -87,7 +87,7 @@ scripts/solaris/cross/check.sh
 Also copy and run the probes on the target:
 
 ```sh
-scripts/solaris/cross/check.sh --ssh pkgsrc-dev
+scripts/solaris/cross/check.sh --ssh illumos-zone
 ```
 
 The remote check uses `~/.cache/codex-solaris-cross-check` temporarily and

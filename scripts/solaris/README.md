@@ -19,7 +19,7 @@ architecture.
 The `illumos-0.156.1` branch incorporates upstream commit `b412ff32c417`
 (tag `rust-v0.156.1`). On September 24, 2026, the full CLI and
 `codex-code-mode-host` cross-built successfully for `x86_64-unknown-illumos`.
-On `pkgsrc-dev` (OmniOS r151058), the CLI printed `codex-cli 0.156.1`,
+On an OmniOS r151058 test zone, the CLI printed `codex-cli 0.156.1`,
 the app-server answered `initialize` with `platformOs: illumos`; both binaries
 resolved their dynamic libraries. The code-mode host executed JavaScript and
 returned `illumos-v8-ok` under the libumem mmap backend. These checks used a
