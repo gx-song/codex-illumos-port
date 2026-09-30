@@ -63,20 +63,8 @@ fn copy_shortcuts_clear_selection_only_after_confirmed_delivery() {
     let cells: Vec<Arc<dyn HistoryCell>> = vec![Arc::new(PlainHistoryCell::new(vec![
         "selected\tca\rfé\x1b\u{85}".into(),
     ]))];
-    for key in [
-        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
-        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
-        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::SUPER),
-        KeyEvent::new(
-            KeyCode::Char('c'),
-            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
-        ),
-        KeyEvent::new(
-            KeyCode::Char('C'),
-            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
-        ),
-        KeyEvent::new(KeyCode::Char('C'), KeyModifiers::CONTROL),
-    ] {
+    let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+    {
         for status in [CopyStatus::Confirmed, CopyStatus::Unconfirmed] {
             for searching in [false, true] {
                 let mut view = TranscriptView::default();
@@ -141,46 +129,6 @@ fn copy_shortcuts_clear_selection_only_after_confirmed_delivery() {
             }
         }
     }
-}
-
-#[test]
-fn command_c_ignores_release_and_copies_only_an_active_selection() {
-    let cells: Vec<Arc<dyn HistoryCell>> = vec![Arc::new(PlainHistoryCell::new(vec![
-        "selected café".into(),
-    ]))];
-    let mut view = TranscriptView::default();
-    let command_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::SUPER);
-    render(&mut view, &cells, /*width*/ 24, /*height*/ 3);
-    assert!(view.handle_key(command_c, &cells).is_none());
-    view.begin_selection(&cells, /*column*/ 0, /*row*/ 0, /*clicks*/ 3);
-    assert!(
-        view.handle_key(
-            KeyEvent::new_with_kind(
-                KeyCode::Char('c'),
-                KeyModifiers::SUPER,
-                KeyEventKind::Release,
-            ),
-            &cells,
-        )
-        .is_none()
-    );
-    assert_eq!(view.selected_text(&cells).as_deref(), Some("selected café"));
-    let Some(ViewAction::Copy(text)) = view.handle_key(command_c, &cells) else {
-        panic!("Cmd+C must copy the transcript selection");
-    };
-    assert_eq!(text, "selected café");
-    view.copy_selected_text_with(&cells, &text, /*clear_selection*/ true, |_, _format| {
-        Ok(crate::clipboard_copy::CopyStatus::Confirmed)
-    })
-    .unwrap();
-    assert!(view.handle_key(command_c, &cells).is_none());
-    assert!(
-        view.handle_key(
-            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
-            &cells
-        )
-        .is_none()
-    );
 }
 
 #[test]
@@ -439,10 +387,9 @@ fn tool_selection_copies_its_displayed_revision_after_the_tool_commits() {
         /*revision*/ 2,
     );
     render(&mut view, &cells, /*width*/ 32, /*height*/ 8);
-    let Some(ViewAction::Copy(copied)) = view.handle_key(
-        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
-        &cells,
-    ) else {
+    let Some(ViewAction::CopyAndFollow(copied)) =
+        view.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &cells)
+    else {
         panic!("copy action");
     };
     assert_eq!(copied, selected);

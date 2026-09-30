@@ -176,10 +176,9 @@ fn mouse_selection_preserves_header_reservation_at_turn_boundaries() {
                     &cells,
                 );
                 assert_eq!(render(&mut view, &cells, width, height), selected);
-                let Some(ViewAction::Copy(copied)) = view.handle_key(
-                    KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
-                    &cells,
-                ) else {
+                let Some(ViewAction::CopyAndFollow(copied)) =
+                    view.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &cells)
+                else {
                     panic!("copy selection at {width}x{height}");
                 };
                 assert_eq!(copied, "10:16 AM");

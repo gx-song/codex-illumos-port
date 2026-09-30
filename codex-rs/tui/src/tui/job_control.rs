@@ -181,14 +181,14 @@ impl PreparedResumeAction {
         terminal: &mut Terminal,
         screen_size: Size,
         owned: bool,
-        capture_mouse: bool,
+        input: super::AlternateInput,
     ) -> Result<()> {
         match self {
             PreparedResumeAction::RealignViewport(area) => {
                 terminal.set_viewport_area(area);
             }
             PreparedResumeAction::RestoreAltScreen => {
-                super::ALTERNATE_SCREEN.enter(terminal.backend_mut(), capture_mouse)?;
+                super::ALTERNATE_SCREEN.enter(terminal.backend_mut(), input)?;
                 if owned {
                     terminal.hide_cursor()?;
                 }

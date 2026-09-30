@@ -630,7 +630,7 @@ pub enum TuiEvent {
     FocusLost,
 }
 
-/// The current screen's pointer policy; ordinary pickers retain alternate-scroll input.
+/// The current screen's pointer policy; transcript screens leave selection to the terminal.
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) enum OverlayInput {
     #[default]
@@ -641,12 +641,21 @@ pub(crate) enum OverlayInput {
     Usage,
 }
 
+/// Mouse reporting and wheel translation are independent of fullscreen rendering.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum AlternateInput {
+    TerminalSelection,
+    AlternateScroll,
+    MouseCapture,
+}
+
 impl OverlayInput {
-    fn captures_mouse(self, owned_screen: bool) -> bool {
+    fn input_policy(self, owned_screen: bool) -> AlternateInput {
         match self {
-            Self::Default => owned_screen,
-            Self::Onboarding | Self::StaticPager => false,
-            Self::Transcript | Self::Usage => true,
+            Self::Default if owned_screen => AlternateInput::TerminalSelection,
+            Self::Transcript => AlternateInput::TerminalSelection,
+            Self::Default | Self::Onboarding | Self::StaticPager => AlternateInput::AlternateScroll,
+            Self::Usage => AlternateInput::MouseCapture,
         }
     }
 }
@@ -788,8 +797,10 @@ impl Tui {
         let transition = if owned {
             self.owned_screen = true;
             if self.is_alt_screen_active() {
-                ALTERNATE_SCREEN
-                    .configure_input(self.terminal.backend_mut(), /*capture_mouse*/ true)
+                ALTERNATE_SCREEN.configure_input(
+                    self.terminal.backend_mut(),
+                    self.overlay_input.input_policy(self.owned_screen),
+                )
             } else {
                 self.enter_alt_screen()
             }
@@ -1072,7 +1083,7 @@ impl Tui {
         }
         let result = ALTERNATE_SCREEN.enter(
             self.terminal.backend_mut(),
-            self.overlay_input.captures_mouse(self.owned_screen),
+            self.overlay_input.input_policy(self.owned_screen),
         );
         self.alt_screen_active
             .store(ALTERNATE_SCREEN.is_active(), Ordering::Relaxed);
@@ -1289,7 +1300,7 @@ impl Tui {
                     &mut self.terminal,
                     screen_size,
                     self.owned_screen,
-                    self.overlay_input.captures_mouse(self.owned_screen),
+                    self.overlay_input.input_policy(self.owned_screen),
                 )?;
             }
 
@@ -1440,7 +1451,7 @@ impl Tui {
                     &mut self.terminal,
                     screen_size,
                     self.owned_screen,
-                    self.overlay_input.captures_mouse(self.owned_screen),
+                    self.overlay_input.input_policy(self.owned_screen),
                 )?;
             }
 

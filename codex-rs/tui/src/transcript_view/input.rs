@@ -135,11 +135,7 @@ impl TranscriptView {
             return true;
         }
         if self.selection.is_some() {
-            return (code == KeyCode::Char('c')
-                && matches!(modifiers, KeyModifiers::CONTROL | KeyModifiers::SUPER))
-                || (code == KeyCode::Char('c')
-                    && modifiers == (KeyModifiers::CONTROL | KeyModifiers::SHIFT))
-                || code == KeyCode::Esc
+            return code == KeyCode::Esc
                 || (code == KeyCode::Enter && modifiers == KeyModifiers::NONE)
                 || (matches!(modifiers, KeyModifiers::NONE | KeyModifiers::SHIFT)
                     && matches!(
@@ -289,19 +285,11 @@ impl TranscriptView {
         key: KeyEvent,
         cells: &[Arc<dyn HistoryCell>],
     ) -> Option<ViewAction> {
-        if crate::text_selection::is_copy_key(key)
-            || (key.modifiers == KeyModifiers::NONE && key.code == KeyCode::Enter)
-        {
+        if key.modifiers == KeyModifiers::NONE && key.code == KeyCode::Enter {
             return Some(
                 self.selected_text(cells)
                     .filter(|text| !text.is_empty())
-                    .map_or(ViewAction::Changed, |text| {
-                        if key.code == KeyCode::Enter {
-                            ViewAction::CopyAndFollow(text)
-                        } else {
-                            ViewAction::Copy(text)
-                        }
-                    }),
+                    .map_or(ViewAction::Changed, ViewAction::CopyAndFollow),
             );
         }
         if key.code == KeyCode::Esc {

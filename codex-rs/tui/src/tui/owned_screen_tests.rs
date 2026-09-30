@@ -127,7 +127,7 @@ async fn owned_screen_lifecycle_child() {
             &mut tui.terminal,
             Size::new(/*width*/ 80, /*height*/ 24),
             /*owned*/ false,
-            tui.overlay_input.captures_mouse(/*owned_screen*/ false),
+            tui.overlay_input.input_policy(/*owned_screen*/ false),
         )
         .expect("resume static pager");
     pager
@@ -177,7 +177,7 @@ async fn owned_screen_lifecycle_child() {
             &mut tui.terminal,
             resumed,
             /*owned*/ true,
-            /*capture_mouse*/ true,
+            super::AlternateInput::TerminalSelection,
         )
         .expect("resume owned screen");
     assert_eq!(

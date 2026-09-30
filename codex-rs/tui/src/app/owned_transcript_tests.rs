@@ -633,6 +633,62 @@ async fn owned_details_escape_interrupts_work_without_starting_backtrack() -> Re
 }
 
 #[tokio::test]
+async fn owned_transcript_selection_ctrl_c_interrupts_active_turn() -> Result<()> {
+    let (mut app, _events, mut operations) = make_test_app_with_channels().await;
+    let thread_id = ThreadId::new();
+    attach_thread(&mut app, thread_id);
+    app.transcript_cells = vec![user_cell("historical prompt")];
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    tui.set_owned_screen(/*owned*/ true)?;
+    app.chat_widget.handle_server_notification(
+        ServerNotification::TurnStarted(codex_app_server_protocol::TurnStartedNotification {
+            thread_id: thread_id.to_string(),
+            turn: codex_app_server_protocol::Turn {
+                id: "active-turn".to_string(),
+                items_view: codex_app_server_protocol::TurnItemsView::Full,
+                items: Vec::new(),
+                status: codex_app_server_protocol::TurnStatus::InProgress,
+                error: None,
+                started_at: None,
+                completed_at: None,
+                duration_ms: None,
+            },
+        }),
+        /*replay_kind*/ None,
+    );
+    app.render_owned_transcript(&mut tui, Size::new(/*width*/ 80, /*height*/ 24))?;
+    for key in [
+        KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL),
+        KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT),
+    ] {
+        app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::Key(key))
+            .await?;
+    }
+    assert!(app.transcript_view.has_active_interaction());
+    app.handle_tui_event(
+        &mut tui,
+        &mut app_server,
+        TuiEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+    )
+    .await?;
+    let interrupts = std::iter::from_fn(|| operations.try_recv().ok())
+        .filter(|event| matches!(event, AppCommand::Interrupt))
+        .count();
+    assert_eq!(
+        (
+            interrupts,
+            app.backtrack.overlay_preview_active,
+            tui.is_owned_screen(),
+        ),
+        (1, false, true),
+    );
+    tui.set_owned_screen(/*owned*/ false)?;
+    app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn owned_backtrack_keys_edit_the_selected_prompt_and_restore_compact_view() -> Result<()> {
     let (mut app, mut events, _operations) = make_test_app_with_channels().await;
     let thread_id = ThreadId::new();
@@ -803,10 +859,10 @@ async fn owned_search_and_selection_consume_input_before_composer_and_backtrack(
         )?);
     }
     let copy = app.transcript_view.handle_key(
-        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
         &app.transcript_cells,
     );
-    assert!(matches!(copy, Some(ViewAction::Copy(text)) if !text.is_empty()));
+    assert!(matches!(copy, Some(ViewAction::CopyAndFollow(text)) if !text.is_empty()));
     assert!(app.handle_owned_transcript_event(&mut tui, &mut app_server, &escape)?);
     assert!(!app.backtrack.overlay_preview_active);
     assert!(app.handle_owned_transcript_event(&mut tui, &mut app_server, &escape)?);
@@ -1387,11 +1443,7 @@ async fn fullscreen_composer_mouse_copy_and_input_ownership() -> Result<()> {
     ] {
         assert!(!app.handle_composer_copy_event(&mut tui, &event, |_, _| unreachable!()));
     }
-    let copy_events = [
-        TuiEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::SUPER)),
-        TuiEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
-        mouse(Down(Right), x + 2, y),
-    ];
+    let copy_events = [mouse(Down(Right), x + 2, y)];
     let mut selection_frames = Vec::new();
     for (index, event) in copy_events.iter().enumerate() {
         // Each confirmed copy clears the selection, so select again for the next gesture.
@@ -1447,13 +1499,8 @@ async fn fullscreen_composer_mouse_copy_and_input_ownership() -> Result<()> {
                     },
                 )
             );
-            let gesture = match event {
-                TuiEvent::Mouse(_) => "right-click",
-                TuiEvent::Key(key) if key.modifiers == KeyModifiers::SUPER => "cmd-c",
-                _ => "ctrl-c",
-            };
             selection_frames.push(format!(
-                "{gesture} {result:?}\n{rendered_draft}\n{selection}"
+                "right-click {result:?}\n{rendered_draft}\n{selection}"
             ));
         }
     }

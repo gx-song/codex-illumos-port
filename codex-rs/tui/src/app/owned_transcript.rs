@@ -16,7 +16,7 @@ use crate::transcript_view::ViewAction;
 use ratatui::widgets::Widget;
 
 impl App {
-    /// Copy draft selections before key shortcuts, or after mouse layout has been refreshed.
+    /// Copy draft selections on right-click after mouse layout has been refreshed.
     pub(super) fn handle_composer_copy_event(
         &mut self,
         tui: &mut tui::Tui,

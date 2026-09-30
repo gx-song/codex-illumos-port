@@ -62,7 +62,7 @@ fn mouse_capture_restores_console_mode_and_encoding() {
     );
 
     screen
-        .configure_input(&mut output, /*capture_mouse*/ true)
+        .configure_input(&mut output, super::AlternateInput::MouseCapture)
         .unwrap();
     terminal.process(&std::mem::take(&mut output));
     assert_ne!(console_mode(&input) & ENABLE_MOUSE_INPUT, 0);
@@ -72,7 +72,7 @@ fn mouse_capture_restores_console_mode_and_encoding() {
     );
 
     screen
-        .configure_input(&mut output, /*capture_mouse*/ false)
+        .configure_input(&mut output, super::AlternateInput::AlternateScroll)
         .unwrap();
     terminal.process(&output);
     assert_eq!(

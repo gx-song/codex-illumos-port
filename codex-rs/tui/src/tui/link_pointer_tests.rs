@@ -51,7 +51,7 @@ fn capture_release_restores_pointer_even_after_moving_off_link() {
         let screen = super::super::alternate_screen::AlternateScreen::default();
         let mut output = Vec::new();
         screen
-            .configure_input(&mut output, /*capture_mouse*/ true)
+            .configure_input(&mut output, super::super::AlternateInput::MouseCapture)
             .unwrap();
         screen
             .set_link_pointer(&mut output, /*over_link*/ true)

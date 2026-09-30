@@ -32,8 +32,7 @@ impl ChatComposer {
         event: &TuiEvent,
         copy: impl FnOnce(&str) -> Result<CopyStatus, String>,
     ) -> Option<(usize, Result<CopyStatus, String>)> {
-        let copy_requested = matches!(event, TuiEvent::Key(key) if crate::text_selection::is_copy_key(*key))
-            || matches!(event, TuiEvent::Mouse(mouse)
+        let copy_requested = matches!(event, TuiEvent::Mouse(mouse)
                     if mouse.kind == MouseEventKind::Down(MouseButton::Right)
                         && self.draft.textarea.contains_mouse(*mouse));
         if !copy_requested

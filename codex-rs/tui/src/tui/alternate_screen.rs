@@ -1,9 +1,10 @@
 //! Pair alternate-screen transitions with that screen's independent keyboard-mode stack.
 //!
 //! Push only on entry and pop before leaving or yielding input to an editor. The main screen
-//! keeps its own TUI mode until the handoff returns to it. Transcript surfaces retain pointer
-//! reporting across overlays and disable it before yielding. Promoting an overlay must not push
-//! another keyboard frame. Refresh tmux's input policy on entry for mouse-capture requests.
+//! keeps its own TUI mode until the handoff returns to it. Transcript surfaces leave ordinary
+//! selection to the terminal; specialized overlays can request pointer reporting. Promoting an
+//! overlay must not push another keyboard frame. Refresh tmux's input policy on entry for
+//! mouse-capture requests.
 
 use std::io::Result;
 use std::io::Write;
@@ -20,6 +21,7 @@ use crossterm::queue;
 use crossterm::terminal::EnterAlternateScreen;
 use crossterm::terminal::LeaveAlternateScreen;
 
+use super::AlternateInput;
 use super::DisableAlternateScroll;
 use super::EnableAlternateScroll;
 use super::KeyboardRestore;
@@ -82,7 +84,7 @@ impl AlternateScreen {
         self.active.load(Ordering::Relaxed)
     }
 
-    pub(super) fn enter(&self, writer: &mut impl Write, capture_mouse: bool) -> Result<()> {
+    pub(super) fn enter(&self, writer: &mut impl Write, input: AlternateInput) -> Result<()> {
         queue!(writer, EnterAlternateScreen)?;
         // Stdout retains queued bytes on a flush error; cleanup must follow that pending entry.
         self.active.store(/*val*/ true, Ordering::Relaxed);
@@ -96,17 +98,19 @@ impl AlternateScreen {
             mouse_capture == MouseCapture::DisabledByTmux,
             Ordering::Relaxed,
         );
-        self.configure_input(writer, capture_mouse)
+        self.configure_input(writer, input)
     }
 
     pub(super) fn configure_input(
         &self,
         writer: &mut impl Write,
-        capture_mouse: bool,
+        input: AlternateInput,
     ) -> Result<()> {
         self.input_configured
             .store(/*val*/ false, Ordering::Relaxed);
-        let result = if capture_mouse && !self.mouse_capture_disabled.load(Ordering::Relaxed) {
+        let result = if input == AlternateInput::MouseCapture
+            && !self.mouse_capture_disabled.load(Ordering::Relaxed)
+        {
             // A partial write can already enable reporting; cleanup must still attempt to stop it.
             self.mouse_active.store(/*val*/ true, Ordering::Relaxed);
             execute!(writer, DisableAlternateScroll, EnablePointerCapture).and_then(|()| {
@@ -117,7 +121,12 @@ impl AlternateScreen {
             })
         } else {
             let mouse_result = self.disable_mouse(writer);
-            let scroll_result = execute!(writer, EnableAlternateScroll);
+            let scroll_result = match input {
+                AlternateInput::AlternateScroll => execute!(writer, EnableAlternateScroll),
+                AlternateInput::TerminalSelection | AlternateInput::MouseCapture => {
+                    execute!(writer, DisableAlternateScroll)
+                }
+            };
             mouse_result.and(scroll_result)
         };
         if result.is_ok() {
@@ -221,7 +230,7 @@ impl AlternateScreen {
 
 impl super::OverlayInput {
     /// Roll back a partial overlay setup immediately; callers still receive the original error.
-    /// The fallback keeps capture when the session owns the screen, otherwise restores the picker.
+    /// The fallback returns selection to the terminal after a failed capture request.
     pub(super) fn apply(
         &mut self,
         screen: &AlternateScreen,
@@ -233,9 +242,9 @@ impl super::OverlayInput {
             return Ok(());
         }
         *self = next;
-        if let Err(error) = screen.configure_input(writer, next.captures_mouse(owned)) {
+        if let Err(error) = screen.configure_input(writer, next.input_policy(owned)) {
             *self = Self::Default;
-            let _ = screen.configure_input(writer, owned);
+            let _ = screen.configure_input(writer, Self::Default.input_policy(owned));
             return Err(error);
         }
         Ok(())

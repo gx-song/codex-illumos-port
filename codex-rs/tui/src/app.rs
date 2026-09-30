@@ -850,13 +850,6 @@ impl App {
         self.finish_clipboard(tui, &event);
         let event = self.finish_right_click_paste(tui, event);
         let idle_draw = matches!(event, TuiEvent::Draw);
-        if matches!(&event, TuiEvent::Key(_))
-            && self.handle_composer_copy_event(tui, &event, |tui, text| {
-                tui.copy_transcript_selection(text, crate::clipboard_copy::CopyFormat::PlainText)
-            })
-        {
-            return Ok(AppRunControl::Continue);
-        }
         // Resume arrives after suspension; retain the last painted phase across hidden owners.
         if matches!(&event, TuiEvent::Resume) || !tui.is_owned_screen() || self.overlay.is_some() {
             self.chat_widget

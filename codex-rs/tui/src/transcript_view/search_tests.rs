@@ -1074,11 +1074,8 @@ fn selection_keys_precede_find_and_typing_returns_to_query() {
     );
     view.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE), &cells);
     assert!(matches!(
-        view.handle_key(
-            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
-            &cells
-        ),
-        Some(ViewAction::Copy(_))
+        view.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &cells),
+        Some(ViewAction::CopyAndFollow(_))
     ));
     assert!(view.is_search_active());
     view.handle_key(
