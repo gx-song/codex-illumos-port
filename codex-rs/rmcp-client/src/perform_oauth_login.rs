@@ -172,7 +172,7 @@ pub async fn perform_oauth_login_silent(
             http_headers,
             env_http_headers,
             scopes,
-            oauth_client_id,
+            oauth_config,
             client_registration,
             oauth_resource,
             callback_port,
