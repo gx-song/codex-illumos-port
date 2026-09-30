@@ -40,6 +40,7 @@ const SAFETY_RETRY_THREAD_NAME: &str = "Safety retry source";
 enum SafetyRetryScenario {
     Once,
     RetryTwice,
+    PendingPermissions,
     InterruptedPrevious,
     UnsupportedPermissions,
 }
@@ -569,6 +570,16 @@ goals = true
         .enable(Feature::Goals)
         .expect("test config should allow goals");
 
+    if scenario == SafetyRetryScenario::PendingPermissions {
+        app.config
+            .permissions
+            .set_permission_profile_from_session_snapshot(
+                PermissionProfileSnapshot::from_session_snapshot(
+                    PermissionProfile::Disabled,
+                    Some(ActivePermissionProfile::new(":danger-full-access")),
+                ),
+            )?;
+    }
     let mut tui = crate::tui::test_support::make_test_tui()?;
     let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
     let mut started = app_server.start_thread(&app.config).await?;
@@ -716,6 +727,11 @@ goals = true
 
     let primary_thread_id = ThreadId::new();
     app.primary_thread_id = Some(primary_thread_id);
+    let voice_owner = ThreadId::new();
+    let (mut owner, _, _, _) = crate::chatwidget::tests::make_chatwidget_manual_with_sender().await;
+    crate::chatwidget::activate_voice_for_thread(&mut owner, voice_owner);
+    owner.park_voice();
+    app.background_voice = Some(Box::new(owner));
     Box::pin(app.retry_safety_buffered_turn(
         &mut tui,
         &mut app_server,
@@ -778,6 +794,22 @@ goals = true
         }
     }
 
+    if scenario == SafetyRetryScenario::PendingPermissions {
+        app.runtime_permission_profile_override = Some(
+            RuntimePermissionProfileOverride::from_config(app.chat_widget.config_ref()),
+        );
+        app.select_permission_profile(
+            &mut app_server,
+            PermissionProfileSelection {
+                profile_id: ":read-only".into(),
+                approval_policy: Some(AskForApproval::OnRequest),
+                approvals_reviewer: Some(ApprovalsReviewer::User),
+                display_label: "Read Only".into(),
+            },
+        )
+        .await;
+    }
+
     Box::pin(app.retry_safety_buffered_turn(
         &mut tui,
         &mut app_server,
@@ -790,6 +822,7 @@ goals = true
         },
     ))
     .await;
+    assert_eq!(app.voice_owner_thread_id(), Some(voice_owner));
 
     if scenario == SafetyRetryScenario::UnsupportedPermissions {
         assert_eq!(app.active_thread_id, Some(source_thread_id));
@@ -917,6 +950,15 @@ goals = true
     let retry_thread_id = app.chat_widget.thread_id().expect("retry thread id");
     // Capture the completed retry before processing its automatic goal continuation.
     wait_for_turn_completed(&mut app, &mut app_server, retry_thread_id).await;
+    if scenario == SafetyRetryScenario::PendingPermissions {
+        assert_eq!(
+            app.chat_widget
+                .config_ref()
+                .permissions
+                .permission_profile(),
+            &PermissionProfile::read_only()
+        );
+    }
     let mut replayed_history = String::new();
     while let Ok(event) = app_event_rx.try_recv() {
         if let AppEvent::InsertHistoryCell(cell) = event {
@@ -1156,6 +1198,17 @@ async fn safety_retry_rejects_unsupported_permissions_before_interrupting() -> R
         /*failing_draft*/ None,
         /*committed_steer*/ None,
         SafetyRetryScenario::UnsupportedPermissions,
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn safety_retry_preserves_unconfirmed_permissions_on_its_first_turn() -> Result<()> {
+    run_safety_retry(
+        /*previous_prompt*/ None,
+        /*failing_draft*/ None,
+        /*committed_steer*/ None,
+        SafetyRetryScenario::PendingPermissions,
     )
     .await
 }

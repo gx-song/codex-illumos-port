@@ -21,6 +21,7 @@ codex-exec-server = { workspace = true }
 codex-http-client = { workspace = true }
 codex-keyring-store = { workspace = true }
 codex-network-proxy = { workspace = true }
+codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-secrets = { workspace = true }
 codex-utils-path-uri = { workspace = true }
@@ -33,7 +34,7 @@ keyring = { workspace = true, features = ["crypto-rust"] }
 memchr = { workspace = true }
 oauth2 = "5"
 rmcp = { workspace = true, default-features = false, features = [
-    "auth",
+    "auth-enterprise-managed",
     "base64",
     "client",
     "macros",
@@ -60,12 +61,14 @@ tokio = { workspace = true, features = [
     "io-std",
     "time",
 ] }
+tokio-util = { workspace = true, features = ["rt"] }
 tracing = { workspace = true, features = ["log"] }
 url = { workspace = true }
 urlencoding = { workspace = true }
 which = { workspace = true }
 
 [dev-dependencies]
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
 codex-http-client = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }
@@ -94,10 +97,14 @@ keyring = { workspace = true, features = ["sync-secret-service"] }
 [target.'cfg(not(any(target_os = "illumos", target_os = "solaris")))'.dependencies]
 webbrowser = { workspace = true }
 
-# This test is compiled through `#[path]` inside the inline `oauth::tests` module. Cargo-shear
-# cannot resolve that nested module path and otherwise reports the linked file as unlinked.
+# These tests are compiled through `#[path]` inside the inline `oauth::tests` module. Cargo-shear
+# cannot resolve those nested module paths and otherwise reports the linked files as unlinked.
 [package.metadata.cargo-shear]
-ignored-paths = ["src/oauth/tests/persistor_tests.rs", "src/oauth/tests/credential_store_tests.rs"]
+ignored-paths = [
+    "src/oauth/tests/persistor_tests.rs",
+    "src/oauth/tests/credential_store_tests.rs",
+    "src/oauth/tests/telemetry_tests.rs",
+]
 
 [lib]
 doctest = false

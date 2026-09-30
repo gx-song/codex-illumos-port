@@ -28,7 +28,6 @@ axum = { workspace = true, default-features = false, features = ["http1", "tokio
 base64 = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 clap = { workspace = true, features = ["derive"] }
-clap_complete = { workspace = true }
 codex-ansi-escape = { workspace = true }
 codex-app-server-client = { workspace = true }
 codex-app-server-daemon = { workspace = true }
@@ -41,7 +40,6 @@ codex-config = { workspace = true }
 codex-context-fragments = { workspace = true }
 codex-connectors = { workspace = true }
 codex-core-plugins = { workspace = true }
-codex-exec = { workspace = true }
 codex-history = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-features = { workspace = true }
@@ -165,19 +163,16 @@ windows-sys = { version = "0.52", features = [
 winsplit = "0.1"
 
 [target.'cfg(not(any(target_os = "illumos", target_os = "solaris")))'.dependencies]
-syntect = "5"
-two-face = { version = "0.5", default-features = false, features = ["syntect-default-onig"] }
+syntect = { version = "5", default-features = false, features = ["parsing", "plist-load", "regex-onig"] }
+two-face = { version = "0.5", default-features = false, features = ["syntect-onig"] }
 webbrowser = { workspace = true }
 
-# Syntect's default Oniguruma backend is C code that does not cross-compile for
-# illumos/Solaris (it relies on `alloca`, which the target headers do not
-# declare under C99). Use the pure-Rust fancy-regex backend there instead; see
-# scripts/solaris/PORTING_NOTES.md.
+# The Oniguruma C backend does not cross-compile for illumos/Solaris.
 [target.'cfg(any(target_os = "illumos", target_os = "solaris"))'.dependencies]
 syntect = { version = "5", default-features = false, features = ["default-fancy"] }
 two-face = { version = "0.5", default-features = false, features = ["syntect-default-fancy"] }
 
-# Clipboard support via `arboard` is unavailable on Android/Termux, illumos, and Solaris.
+# Clipboard support via `arboard` is unavailable on Android/Termux and illumos/Solaris.
 [target.'cfg(not(any(target_os = "android", target_os = "illumos", target_os = "solaris")))'.dependencies]
 arboard = { workspace = true }
 

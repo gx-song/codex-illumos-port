@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
-#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 use std::collections::btree_map::Entry;
 use std::fs;
 use std::io::Read;
@@ -10,23 +9,19 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
-#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 use std::time::Duration;
-#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 use std::time::Instant;
 
-#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
-#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 use codex_http_client::ClientRouteClass;
 use codex_http_client::HttpClientFactory;
-#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 use codex_http_client::RouteAwareClientPool;
 use codex_login::AuthEnvTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
+use codex_state::LogWriteFailureReporter;
 use tracing::Event;
 use tracing::Level;
 use tracing::field::Visit;
@@ -38,9 +33,7 @@ use tracing_subscriber::registry::LookupSpan;
 
 pub(crate) mod feedback_diagnostics;
 mod guardian;
-#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 mod report_upload;
-#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 mod upload;
 pub use feedback_diagnostics::FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME;
 pub use feedback_diagnostics::FeedbackDiagnostic;
@@ -48,11 +41,8 @@ pub use feedback_diagnostics::FeedbackDiagnostics;
 pub use guardian::GuardianReviewFailures;
 pub use guardian::guardian_review_failures;
 pub use guardian::record_guardian_review_failure;
-#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 pub use report_upload::FeedbackDelivery;
-#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 pub use report_upload::FeedbackTransport;
-#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 pub use report_upload::prepare_report_attachment;
 
 /// Filename used for the redacted `codex doctor --json` feedback attachment.
@@ -64,10 +54,8 @@ pub const CODEX_APP_DIRECTORY_CACHE_ATTACHMENT_FILENAME: &str = "codex-app-direc
 /// Filename used for the Windows sandbox log feedback attachment.
 pub const WINDOWS_SANDBOX_LOG_ATTACHMENT_FILENAME: &str = "windows-sandbox.log";
 const DEFAULT_MAX_BYTES: usize = 4 * 1024 * 1024; // 4 MiB
-#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 const SENTRY_DSN: &str =
     "https://ae32ed50620d7a7792c1ce5df38b3e3e@o33249.ingest.us.sentry.io/4510195390611458";
-#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 const UPLOAD_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 300);
 // Raw collection budgets used by the report API, not the interactive upload.
 pub const MAX_ATTACHMENT_BYTES: usize = 64 * 1024 * 1024;
@@ -76,9 +64,7 @@ pub const MAX_ATTACHMENTS_BYTES: usize = 126 * 1024 * 1024;
 // they may already be compressed, and callers need an error for incomplete delivery.
 // This bounds the decoded request including framing, not guaranteed attachment storage.
 // https://develop.sentry.dev/sdk/foundations/envelopes/#size-limits
-#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 const MAX_DECODED_UPLOAD_BYTES: usize = 200 * 1024 * 1024;
-#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 const MAX_EVENT_BYTES: usize = 1024 * 1024;
 const FEEDBACK_TAGS_TARGET: &str = "feedback_tags";
 // Leave room for every feature, usage settings, and request/auth diagnostics.
@@ -211,6 +197,17 @@ pub struct CodexFeedback {
     inner: Arc<FeedbackInner>,
 }
 
+impl LogWriteFailureReporter for CodexFeedback {
+    fn report_failure(&self, diagnostic: &str) {
+        // Bypass tracing so this diagnostic cannot return to the SQLite writer.
+        self.inner
+            .ring
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push_bytes(diagnostic.as_bytes());
+    }
+}
+
 impl Default for CodexFeedback {
     fn default() -> Self {
         Self::new()
@@ -253,6 +250,8 @@ impl CodexFeedback {
             .with_filter(
                 Targets::new()
                     .with_default(Level::TRACE)
+                    // Opted-in content belongs to the configured OTLP destination, not feedback.
+                    .with_target("codex_otel.log_only", LevelFilter::OFF)
                     .with_target("codex_http_client::transport", LevelFilter::DEBUG)
                     .with_target("codex_api::sse", LevelFilter::DEBUG)
                     // `tracing-log` checks legacy log records against their original
@@ -502,7 +501,16 @@ pub struct FeedbackUploadOptions<'a> {
 }
 
 impl FeedbackSnapshot {
-    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
+    /// Refreshes log bytes while preserving the captured metadata and thread identity.
+    pub fn refresh_logs(&mut self, feedback: &CodexFeedback) {
+        self.bytes = feedback
+            .inner
+            .ring
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .snapshot_bytes();
+    }
+
     fn feedback_event(
         &self,
         classification: &str,
@@ -582,7 +590,6 @@ impl FeedbackSnapshot {
     /// Success means HTTP acceptance, not durable attachment storage. Callers must
     /// retain their source files; errors can occur after part of a report is accepted.
     /// https://github.com/getsentry/relay/blob/master/relay-server/src/endpoints/common.rs
-    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
     pub async fn upload_feedback(
         &self,
         options: FeedbackUploadOptions<'_>,
@@ -597,7 +604,6 @@ impl FeedbackSnapshot {
         .await
     }
 
-    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
     async fn upload_feedback_with_dsn(
         &self,
         options: FeedbackUploadOptions<'_>,
@@ -711,19 +717,6 @@ impl FeedbackSnapshot {
         Ok(())
     }
 
-    #[cfg(any(target_os = "illumos", target_os = "solaris"))]
-    pub async fn upload_feedback(
-        &self,
-        options: FeedbackUploadOptions<'_>,
-        _http_client_factory: &HttpClientFactory,
-    ) -> Result<()> {
-        let _ = (&self.bytes, &self.tags, options);
-        Err(anyhow!(
-            "feedback upload is unsupported on illumos and Solaris"
-        ))
-    }
-
-    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
     fn upload_tags(
         &self,
         classification: &str,
@@ -740,8 +733,15 @@ impl FeedbackSnapshot {
         if let Some(source) = session_source {
             tags.insert(String::from("session_source"), source.to_string());
         }
-        if let Some(r) = reason {
-            tags.insert(String::from("reason"), r.to_string());
+        if let Some(reason) = reason {
+            // Sentry tags cannot contain newlines or exceed 200 characters. Keep the
+            // full comment in the exception body and a preview for tag consumers.
+            let preview = reason
+                .chars()
+                .take(200)
+                .map(|ch| if matches!(ch, '\r' | '\n') { ' ' } else { ch })
+                .collect();
+            tags.insert(String::from("reason"), preview);
         }
 
         let reserved = [
@@ -773,7 +773,6 @@ impl FeedbackSnapshot {
         tags
     }
 
-    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
     fn feedback_attachments<'a>(
         &'a self,
         include_logs: bool,
@@ -823,7 +822,6 @@ impl FeedbackSnapshot {
     }
 }
 
-#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 fn display_classification(classification: &str) -> String {
     match classification {
         "bug" => "Bug".to_string(),
@@ -968,6 +966,11 @@ mod tests {
             .set_default();
 
         tracing::trace!(target: "codex_api::responses_websocket_timing", payload = "secret");
+        tracing::event!(
+            target: "codex_otel.log_only", tracing::Level::INFO,
+            event.name = "codex.agent_response", response = "private-agent-response"
+        );
+        tracing::info!(target: "codex_otel.log_only", rationale = "private-guardian-rationale");
         tracing::trace!(target: "codex_http_client::transport", "transport-trace");
         tracing::trace!(target: "codex_api::sse", "sse-trace");
         tracing::trace!(target: "codex_api::sse::responses", "nested-sse-trace");
@@ -985,6 +988,8 @@ mod tests {
         let logs = String::from_utf8(fb.snapshot(/*session_id*/ None).bytes).unwrap();
         for excluded in [
             "secret",
+            "private-agent-response",
+            "private-guardian-rationale",
             "transport-trace",
             "sse-trace",
             "nested-sse-trace",
@@ -1044,7 +1049,6 @@ mod tests {
             .await
     }
 
-    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
     #[tokio::test]
     async fn feedback_upload_allows_slow_reports() {
         let server = MockServer::start().await;
@@ -1433,7 +1437,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
     #[tokio::test]
     async fn feedback_upload_reports_rejected_sentry_response_without_exposing_feedback() {
         let server = MockServer::start().await;
@@ -1456,7 +1459,6 @@ mod tests {
         assert!(!error.contains("private feedback"));
     }
 
-    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
     #[tokio::test]
     async fn feedback_upload_does_not_forward_private_data_to_redirect_target() {
         let sentry_server = MockServer::start().await;
@@ -1485,7 +1487,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
     #[tokio::test]
     async fn feedback_upload_reports_transport_failures() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0")
@@ -1508,7 +1509,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
     fn feedback_attachments_gate_connectivity_diagnostics() {
         let extra_filename = format!("codex-feedback-extra-{}.jsonl", ThreadId::new());
         let extra_path = std::env::temp_dir().join(&extra_filename);
@@ -1589,7 +1589,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
     fn path_backed_attachments_use_binary_content_types() {
         let suffix = ThreadId::new();
         let gzip_filename = format!("codex-desktop-app-logs-{suffix}.tar.gz");
@@ -1648,7 +1647,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
     fn upload_tags_include_client_tags_and_preserve_reserved_fields() {
         let mut tags = BTreeMap::new();
         tags.insert("thread_id".to_string(), "wrong-thread".to_string());
