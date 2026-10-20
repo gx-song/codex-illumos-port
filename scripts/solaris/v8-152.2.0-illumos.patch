@@ -1,0 +1,229 @@
+--- a/v8/src/base/memory.h
++++ b/v8/src/base/memory.h
+@@ -37,10 +37,13 @@
+   return ReadUnalignedValue<V>(reinterpret_cast<Address>(p));
+ }
+ 
++// illumos defines int8_t as char, which is already handled above.
++#if !defined(__sun__)
+ template <typename V>
+ static inline V ReadUnalignedValue(const int8_t p[sizeof(V)]) {
+   return ReadUnalignedValue<V>(reinterpret_cast<Address>(p));
+ }
++#endif
+ 
+ template <typename V>
+ static inline V ReadUnalignedValue(const uint8_t p[sizeof(V)]) {
+--- a/v8/src/base/platform/platform-linux.cc
++++ b/v8/src/base/platform/platform-linux.cc
+@@ -12,7 +12,9 @@
+ #include <signal.h>
+ #include <stdio.h>
+ #include <stdlib.h>
++#if !defined(__sun__)
+ #include <sys/prctl.h>
++#endif
+ #include <sys/resource.h>
+ #include <sys/syscall.h>
+ #include <sys/time.h>
+@@ -84,6 +86,9 @@
+ void OS::AdjustSchedulingParams() {}
+ 
+ void* OS::RemapShared(void* old_address, void* new_address, size_t size) {
++#if defined(__sun__)
++  return nullptr;
++#else
+   void* result =
+       mremap(old_address, 0, size, MREMAP_FIXED | MREMAP_MAYMOVE, new_address);
+ 
+@@ -92,6 +97,8 @@
+   }
+   DCHECK(result == new_address);
+   return result;
++
++#endif
+ }
+ 
+ std::optional<OS::MemoryRange> OS::GetFirstFreeMemoryRangeWithin(
+@@ -229,6 +236,9 @@
+ // static
+ bool OS::RemapPages(const void* address, size_t size, void* new_address,
+                     MemoryPermission access) {
++#if defined(__sun__)
++  return false;
++#else
+   uintptr_t address_addr = reinterpret_cast<uintptr_t>(address);
+ 
+   DCHECK(IsAligned(address_addr, AllocatePageSize()));
+@@ -308,6 +318,8 @@
+   }
+ 
+   return true;
++
++#endif
+ }
+ 
+ SignalSafeMapsParser::SignalSafeMapsParser(int fd, bool should_close_fd)
+--- a/v8/src/base/platform/platform-posix.cc
++++ b/v8/src/base/platform/platform-posix.cc
+@@ -82,7 +82,7 @@
+ #define MAP_ANONYMOUS MAP_ANON
+ #endif
+ 
+-#if defined(V8_OS_SOLARIS)
++#if defined(V8_OS_SOLARIS) && !defined(__sun__)
+ #if (defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE > 2) || defined(__EXTENSIONS__)
+ extern "C" int madvise(caddr_t, size_t, int);
+ #else
+@@ -1519,6 +1519,37 @@
+ 
+ 
+ 
++#if defined(V8_OS_SOLARIS)
++Stack::StackSlot Stack::ObtainCurrentThreadStackStart() {
++  pthread_attr_t attr;
++  if (pthread_attr_init(&attr) != 0) return nullptr;
++  if (pthread_attr_get_np(pthread_self(), &attr) != 0) {
++    pthread_attr_destroy(&attr);
++    return nullptr;
++  }
++  void* base;
++  size_t size;
++  int error = pthread_attr_getstack(&attr, &base, &size);
++  pthread_attr_destroy(&attr);
++  if (error != 0) return nullptr;
++  return static_cast<uint8_t*>(base) + size;
++}
++
++Stack::StackSlot Stack::ObtainCurrentThreadStackReservedLimit() {
++  pthread_attr_t attr;
++  if (pthread_attr_init(&attr) != 0) return nullptr;
++  if (pthread_attr_get_np(pthread_self(), &attr) != 0) {
++    pthread_attr_destroy(&attr);
++    return nullptr;
++  }
++  void* base;
++  size_t size;
++  int error = pthread_attr_getstack(&attr, &base, &size);
++  pthread_attr_destroy(&attr);
++  return error == 0 ? base : nullptr;
++}
++#endif
++
+ // static
+ void Stack::SetCurrentThreadStackBounds(uintptr_t, uintptr_t) { UNREACHABLE(); }
+ 
+--- a/v8/src/base/platform/platform-posix-time.cc
++++ b/v8/src/base/platform/platform-posix-time.cc
+@@ -14,8 +14,14 @@
+   time_t tv = static_cast<time_t>(std::floor(time / msPerSecond));
+   struct tm tm;
+   struct tm* t = localtime_r(&tv, &tm);
++#if defined(__sun__)
++  if (!t) return "";
++  tzset();
++  return tzname[t->tm_isdst > 0 ? 1 : 0];
++#else
+   if (!t || !t->tm_zone) return "";
+   return t->tm_zone;
++#endif
+ }
+ 
+ double PosixDefaultTimezoneCache::LocalTimeOffset(double time_ms, bool is_utc) {
+@@ -26,8 +32,13 @@
+   struct tm* t = localtime_r(&tv, &tm);
+   DCHECK_NOT_NULL(t);
+   // tm_gmtoff includes any daylight savings offset, so subtract it.
++#if defined(__sun__)
++  tzset();
++  return -static_cast<double>(timezone) * msPerSecond;
++#else
+   return static_cast<double>(t->tm_gmtoff * msPerSecond -
+                              (t->tm_isdst > 0 ? 3600 * msPerSecond : 0));
++#endif
+ }
+ 
+ }  // namespace base
+--- a/v8/src/trap-handler/handler-inside-posix.h
++++ b/v8/src/trap-handler/handler-inside-posix.h
+@@ -13,7 +13,7 @@
+ namespace internal {
+ namespace trap_handler {
+ 
+-#if V8_OS_LINUX || V8_OS_FREEBSD
++#if V8_OS_LINUX || V8_OS_FREEBSD || V8_OS_SOLARIS
+ constexpr int kOobSignal = SIGSEGV;
+ #elif V8_OS_DARWIN
+ constexpr int kOobSignal = SIGBUS;
+--- a/v8/src/wasm/wasm-memory-map-descriptor.cc
++++ b/v8/src/wasm/wasm-memory-map-descriptor.cc
+@@ -4,7 +4,7 @@
+ 
+ #include "include/v8config.h"  // For V8_TARGET_OS_LINUX.
+ 
+-#if V8_TARGET_OS_LINUX
++#if V8_TARGET_OS_LINUX && V8_OS_LINUX
+ #include <sys/mman.h>
+ #include <sys/stat.h>
+ #include <unistd.h>
+@@ -32,7 +32,7 @@
+ 
+ WasmMemoryMapDescriptor::~WasmMemoryMapDescriptor() {
+   mapped_memory_.Reset();
+-#if V8_TARGET_OS_LINUX
++#if V8_TARGET_OS_LINUX && V8_OS_LINUX
+   // TODO(crbug.com/339678654): Define a constant somewhere in the platform
+   // instead of hardcoding -1 here.
+   if (fd_ownership_ == FdOwnership::kAnonymousFdOwnedByV8 &&
+@@ -74,7 +74,7 @@
+ v8::MaybeLocal<v8::Object> WasmMemoryMapDescriptor::NewFromAnonymous(
+     v8::Isolate* isolate, size_t length, v8::Local<v8::Object> wrapper) {
+   CHECK(v8_flags.wasm_memory_control);
+-#if V8_TARGET_OS_LINUX
++#if V8_TARGET_OS_LINUX && V8_OS_LINUX
+   int fd = memfd_create("wasm_memory_map_descriptor", MFD_CLOEXEC);
+   if (fd == -1) return {};
+   if (ftruncate(fd, length) == -1) {
+@@ -109,7 +109,7 @@
+     return 0;
+   }
+ 
+-#if V8_TARGET_OS_LINUX
++#if V8_TARGET_OS_LINUX && V8_OS_LINUX
+   uint8_t* target =
+       reinterpret_cast<uint8_t*>(backing_store->buffer_start()) + offset;
+ 
+@@ -165,7 +165,7 @@
+   CHECK_GE(size_ + offset_, size_);
+   CHECK_LE(size_ + offset_, backing_store->byte_length());
+ 
+-#if V8_TARGET_OS_LINUX
++#if V8_TARGET_OS_LINUX && V8_OS_LINUX
+   uint8_t* target =
+       reinterpret_cast<uint8_t*>(backing_store->buffer_start()) + offset_;
+ 
+--- a/v8/src/wasm/wasm-objects.cc
++++ b/v8/src/wasm/wasm-objects.cc
+@@ -4,7 +4,7 @@
+ 
+ #include "src/wasm/wasm-objects.h"
+ 
+-#if V8_TARGET_OS_LINUX
++#if V8_TARGET_OS_LINUX && V8_OS_LINUX
+ #include <sys/mman.h>
+ #include <sys/stat.h>
+ // `sys/mman.h defines `MAP_TYPE`, but `MAP_TYPE` also gets defined within V8.
+--- a/v8/src/common/assert-scope.cc
++++ b/v8/src/common/assert-scope.cc
+@@ -24,6 +24,11 @@
+ static_assert(!kClearedValue.contains(ASSERT_TYPE_IS_VALID_MARKER));
+ 
+ // Thread-local storage for assert data.
++// Solaris rounds static TLS blocks to at least 16 bytes. Match that alignment
++// so ELF linkers use the same base when relaxing thread-pointer-relative access.
++#if defined(V8_OS_SOLARIS)
++alignas(16)
++#endif
+ thread_local PerThreadAsserts current_per_thread_assert_data(kInitialValue);
+ 
+ }  // namespace

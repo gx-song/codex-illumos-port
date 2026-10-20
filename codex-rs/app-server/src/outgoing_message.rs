@@ -75,6 +75,7 @@ pub(crate) struct RequestContext {
 enum RequestCancellationScope {
     Unavailable,
     UserVerification,
+    ThreadSample,
 }
 
 impl RequestContext {
@@ -92,6 +93,7 @@ impl RequestContext {
                 | "userVerification/enroll"
                 | "userVerification/delete"
                 | "userVerification/verify" => RequestCancellationScope::UserVerification,
+                "thread/sample" => RequestCancellationScope::ThreadSample,
                 _ => RequestCancellationScope::Unavailable,
             },
             span,
@@ -196,6 +198,12 @@ impl ThreadScopedOutgoingMessageSender {
             );
     }
 
+    pub(crate) fn track_realtime_session_updated(&self, realtime_session_id: String) {
+        self.outgoing
+            .analytics_events_client
+            .track_realtime_session_updated(self.thread_id.to_string(), realtime_session_id);
+    }
+
     pub(crate) async fn send_server_notification(&self, notification: ServerNotification) {
         self.outgoing
             .analytics_events_client
@@ -267,6 +275,15 @@ impl OutgoingMessageSender {
         let contexts = self.request_contexts.lock().await;
         if let Some(context) = contexts.get(request_id)
             && context.cancellation_scope == RequestCancellationScope::UserVerification
+        {
+            context.cancellation.cancel();
+        }
+    }
+
+    pub(crate) async fn cancel_thread_sample_request(&self, request_id: &ConnectionRequestId) {
+        let contexts = self.request_contexts.lock().await;
+        if let Some(context) = contexts.get(request_id)
+            && context.cancellation_scope == RequestCancellationScope::ThreadSample
         {
             context.cancellation.cancel();
         }
@@ -901,6 +918,10 @@ fn timestamped_server_notification(notification: ServerNotification) -> Outgoing
         emitted_at_ms: Some(now_unix_timestamp_ms().try_into().unwrap_or_default()),
     })
 }
+
+#[cfg(test)]
+#[path = "thread_sample_cancel_context_tests.rs"]
+mod thread_sample_cancel_context_tests;
 
 #[cfg(test)]
 #[path = "user_verification_ownership_tests.rs"]

@@ -15,6 +15,7 @@
 //! - bubblewrap used to construct the filesystem view before exec.
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fs;
@@ -37,6 +38,8 @@ use codex_protocol::protocol::FileSystemPath;
 use codex_protocol::protocol::FileSystemSandboxPolicy;
 use codex_protocol::protocol::FileSystemSpecialPath;
 use codex_protocol::protocol::WritableRoot;
+use codex_sandboxing::find_executable_in_search_paths;
+use codex_sandboxing::find_pre_sandbox_executable_in_path;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use globset::GlobBuilder;
 use globset::GlobSet;
@@ -57,6 +60,9 @@ const LINUX_PLATFORM_DEFAULT_READ_ROOTS: &[&str] = &[
     "/nix/store",
     "/run/current-system/sw",
 ];
+
+/// External scanner used by deny-glob expansion and its dependency inventory.
+pub const GLOB_SCAN_PROGRAM: &str = "rg";
 
 const MAX_UNREADABLE_GLOB_MATCHES: usize = 8192;
 pub(crate) const WSL_INTEROP_DIR: &str = "/run/WSL";
@@ -122,7 +128,6 @@ pub(crate) struct BwrapArgs {
     pub args: Vec<String>,
     pub preserved_files: Vec<File>,
     pub synthetic_mount_targets: Vec<SyntheticMountTarget>,
-    pub protected_create_targets: Vec<ProtectedCreateTarget>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -153,23 +158,6 @@ pub(crate) struct SyntheticMountTarget {
     // If an empty metadata path was already present, remember its inode so
     // cleanup does not delete a real pre-existing file or directory.
     pre_existing_path: Option<FileIdentity>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ProtectedCreateTarget {
-    path: PathBuf,
-}
-
-impl ProtectedCreateTarget {
-    pub(crate) fn missing(path: &Path) -> Self {
-        Self {
-            path: path.to_path_buf(),
-        }
-    }
-
-    pub(crate) fn path(&self) -> &Path {
-        &self.path
-    }
 }
 
 impl SyntheticMountTarget {
@@ -262,7 +250,6 @@ pub(crate) fn create_bwrap_command_args(
                 args: command,
                 preserved_files: Vec::new(),
                 synthetic_mount_targets: Vec::new(),
-                protected_create_targets: Vec::new(),
             })
         } else {
             Ok(create_bwrap_flags_full_filesystem(command, options))
@@ -315,7 +302,6 @@ fn create_bwrap_flags_full_filesystem(command: Vec<String>, options: BwrapOption
         args,
         preserved_files: Vec::new(),
         synthetic_mount_targets: Vec::new(),
-        protected_create_targets: Vec::new(),
     }
 }
 
@@ -348,7 +334,6 @@ fn create_bwrap_flags(
         args: filesystem_args,
         preserved_files,
         synthetic_mount_targets,
-        protected_create_targets,
     } = create_filesystem_args(file_system_sandbox_policy, sandbox_policy_cwd, options)?;
     let normalized_command_cwd = normalize_command_cwd_for_bwrap(command_cwd);
     let mut args = Vec::new();
@@ -401,7 +386,6 @@ fn create_bwrap_flags(
         args,
         preserved_files,
         synthetic_mount_targets,
-        protected_create_targets,
     })
 }
 
@@ -498,9 +482,17 @@ fn create_filesystem_args(
         expand_unreadable_globs_with_ripgrep(
             &unreadable_globs,
             cwd,
+            || {
+                find_pre_sandbox_executable_in_path(
+                    GLOB_SCAN_PROGRAM,
+                    file_system_sandbox_policy,
+                    cwd,
+                )
+            },
             options
                 .glob_scan_max_depth
                 .or(file_system_sandbox_policy.glob_scan_max_depth),
+            |_| {},
         )?
         .into_iter()
         .map(AbsolutePathBuf::into_path_buf),
@@ -594,7 +586,6 @@ fn create_filesystem_args(
         args,
         preserved_files: Vec::new(),
         synthetic_mount_targets: Vec::new(),
-        protected_create_targets: Vec::new(),
     };
     let mut allowed_write_paths = Vec::with_capacity(writable_roots.len());
     for writable_root in &writable_roots {
@@ -705,13 +696,6 @@ fn create_filesystem_args(
             deferred_read_only_subpaths =
                 remap_paths_for_symlink_target(deferred_read_only_subpaths, root, target);
         }
-        append_protected_create_targets_for_writable_root(
-            &mut bwrap_args,
-            protected_metadata_names,
-            root,
-            symlink_target.as_deref(),
-            &read_only_subpaths,
-        );
         read_only_subpaths.sort_by_key(|path| path_depth(path));
         for subpath in read_only_subpaths {
             if let Some(symlink) =
@@ -814,29 +798,6 @@ fn create_filesystem_args(
     Ok(bwrap_args)
 }
 
-fn append_protected_create_targets_for_writable_root(
-    bwrap_args: &mut BwrapArgs,
-    protected_metadata_names: &[String],
-    root: &Path,
-    symlink_target: Option<&Path>,
-    read_only_subpaths: &[PathBuf],
-) {
-    for name in protected_metadata_names {
-        let mut path = root.join(name);
-        if let Some(target) = symlink_target
-            && let Ok(relative_path) = path.strip_prefix(root)
-        {
-            path = target.join(relative_path);
-        }
-        if read_only_subpaths.iter().any(|subpath| subpath == &path) || path.exists() {
-            continue;
-        }
-        bwrap_args
-            .protected_create_targets
-            .push(ProtectedCreateTarget::missing(&path));
-    }
-}
-
 fn append_metadata_path_masks_for_writable_root(
     read_only_subpaths: &mut Vec<PathBuf>,
     root: &Path,
@@ -886,14 +847,47 @@ fn append_daemon_socket_masks(
     Ok(())
 }
 
+/// Expand deny globs with the launcher's scanner in an explicit command environment.
+/// The supplied environment replaces inheritance, including when it is empty.
+pub fn expand_unreadable_globs_in_environment(
+    patterns: &[String],
+    cwd: &Path,
+    file_system_policy: &FileSystemSandboxPolicy,
+    max_depth: Option<usize>,
+    env: &HashMap<String, String>,
+    command_cwd: &Path,
+) -> Result<Vec<AbsolutePathBuf>> {
+    expand_unreadable_globs_with_ripgrep(
+        patterns,
+        cwd,
+        || {
+            find_executable_in_search_paths(
+                GLOB_SCAN_PROGRAM,
+                std::env::split_paths(env.get("PATH")?),
+                command_cwd,
+                file_system_policy,
+                cwd,
+            )
+        },
+        max_depth,
+        |command| {
+            command.env_clear().envs(env).current_dir(command_cwd);
+        },
+    )
+}
+
 fn expand_unreadable_globs_with_ripgrep(
     patterns: &[String],
     cwd: &Path,
+    resolve_scanner: impl FnOnce() -> Option<PathBuf>,
     max_depth: Option<usize>,
+    configure_command: impl Fn(&mut Command),
 ) -> Result<Vec<AbsolutePathBuf>> {
     if patterns.is_empty() || max_depth == Some(0) {
         return Ok(Vec::new());
     }
+
+    let rg_path = resolve_scanner();
 
     // Group each pattern by the static path prefix before its first glob
     // metacharacter. That keeps scans narrow, avoids searching from `/`, and
@@ -918,7 +912,17 @@ fn expand_unreadable_globs_with_ripgrep(
     // bypassing an unreadable glob match.
     let mut expanded_paths = BTreeSet::new();
     for (search_root, globs) in patterns_by_search_root {
-        for path in ripgrep_files(search_root.as_path(), &globs, max_depth)? {
+        let paths = match &rg_path {
+            Some(rg_path) => ripgrep_files(
+                rg_path,
+                search_root.as_path(),
+                &globs,
+                max_depth,
+                &configure_command,
+            )?,
+            None => glob_files(search_root.as_path(), &globs, max_depth)?,
+        };
+        for path in paths {
             if let Some(target) = canonical_target_if_symlinked_path(path.as_path()) {
                 expanded_paths.insert(AbsolutePathBuf::from_absolute_path_checked(target)?);
             }
@@ -1000,15 +1004,19 @@ fn escape_unclosed_glob_classes(glob: &str) -> String {
 }
 
 fn ripgrep_files(
+    rg_path: &Path,
     search_root: &Path,
     globs: &[String],
     max_depth: Option<usize>,
+    configure_command: &impl Fn(&mut Command),
 ) -> Result<Vec<AbsolutePathBuf>> {
+    let mut command = Command::new(rg_path);
+    configure_command(&mut command);
     // Use `rg --files` rather than shell expansion so dotfiles and ignored files
     // are still considered. A status 1 with no stderr is ripgrep's "no matches"
     // case, not a sandbox construction error.
-    let mut command = Command::new("rg");
     command
+        .arg("--no-config")
         .arg("--files")
         .arg("--hidden")
         .arg("--no-ignore")
@@ -1025,7 +1033,7 @@ fn ripgrep_files(
      * Prefer ripgrep for unreadable glob expansion because it is fast and
      * already implements the file-walking semantics we want here: include
      * dotfiles, ignore ignore files, and do not recurse through symlinked
-     * directories. If `rg` is not installed in the runtime environment, fall
+     * directories. If the selected `rg` is unavailable at execution time, fall
      * back to the internal globset walker so sandbox construction still masks
      * matching paths. Other ripgrep failures stay fatal so deny-read does not
      * silently weaken.
@@ -1253,10 +1261,10 @@ fn append_read_only_subpath_args(
 }
 
 fn append_empty_file_bind_data_args(bwrap_args: &mut BwrapArgs, path: &Path) -> Result<()> {
-    if bwrap_args.preserved_files.is_empty() {
-        bwrap_args.preserved_files.push(File::open("/dev/null")?);
-    }
-    let null_fd = bwrap_args.preserved_files[0].as_raw_fd().to_string();
+    // Bubblewrap consumes and closes the descriptor for each bind-data mount.
+    let null_file = File::open("/dev/null")?;
+    let null_fd = null_file.as_raw_fd().to_string();
+    bwrap_args.preserved_files.push(null_file);
     bwrap_args.args.push("--ro-bind-data".to_string());
     bwrap_args.args.push(null_fd);
     bwrap_args.args.push(path_to_string(path));
@@ -2005,6 +2013,7 @@ mod tests {
         let temp_dir = TempDir::new().expect("temp dir");
         let workspace = temp_dir.path().join("workspace");
         let blocked = workspace.join("blocked");
+        let second_blocked = workspace.join("second-blocked");
         std::fs::create_dir_all(&workspace).expect("create workspace");
 
         let workspace_root =
@@ -2021,20 +2030,30 @@ mod tests {
                 access: FileSystemAccessMode::Read,
                 missing_path_behavior: None,
             },
+            FileSystemSandboxEntry {
+                path: AbsolutePathBuf::from_absolute_path(&second_blocked)
+                    .expect("absolute second blocked")
+                    .into(),
+                access: FileSystemAccessMode::Read,
+                missing_path_behavior: None,
+            },
         ]);
 
         let args = create_filesystem_args(&policy, temp_dir.path(), BwrapOptions::default())
             .expect("filesystem args");
 
         assert_empty_file_bound_without_perms(&args.args, &blocked);
+        assert_empty_file_bound_without_perms(&args.args, &second_blocked);
         assert_empty_directory_mounted_read_only(&args.args, &workspace.join(".git"));
         assert_empty_directory_mounted_read_only(&args.args, &workspace.join(".agents"));
         assert_empty_directory_mounted_read_only(&args.args, &workspace.join(".codex"));
-        assert_eq!(args.preserved_files.len(), 1);
+        assert_eq!(args.preserved_files.len(), 2);
+        assert_bind_data_uses_distinct_preserved_fds(&args);
         assert_eq!(
             synthetic_mount_target_paths(&args),
             vec![
                 blocked.clone(),
+                second_blocked.clone(),
                 workspace.join(".git"),
                 workspace.join(".agents"),
                 workspace.join(".codex"),
@@ -2042,7 +2061,7 @@ mod tests {
             ]
         );
         assert!(
-            !blocked.exists(),
+            !blocked.exists() && !second_blocked.exists(),
             "missing path mask should not materialize host-side metadata paths at arg construction time",
         );
     }
@@ -2125,10 +2144,6 @@ mod tests {
                 workspace.join(".aws"),
             ],
         );
-        assert!(
-            protected_create_target_paths(&args).is_empty(),
-            "missing child .git should be mount protected before command execution",
-        );
     }
 
     #[cfg(unix)]
@@ -2166,10 +2181,6 @@ mod tests {
                 workspace.join(".agents"),
                 workspace.join(".aws"),
             ],
-        );
-        assert!(
-            protected_create_target_paths(&args).is_empty(),
-            "symlinked missing child .git should be mount protected before command execution",
         );
     }
 
@@ -2261,11 +2272,6 @@ mod tests {
         assert!(synthetic_targets.contains(&PathBuf::from(&dot_git)));
         assert!(synthetic_targets.contains(&PathBuf::from(&dot_agents)));
         assert!(synthetic_targets.contains(&PathBuf::from(&dot_codex)));
-        assert_eq!(
-            protected_create_target_paths(&args),
-            Vec::<PathBuf>::new(),
-            "missing protected metadata paths should fail at creation time through read-only mounts",
-        );
     }
 
     #[test]
@@ -2848,7 +2854,9 @@ mod tests {
     fn split_policy_masks_root_read_file_carveouts() {
         let temp_dir = TempDir::new().expect("temp dir");
         let blocked_file = temp_dir.path().join("blocked.txt");
+        let second_blocked_file = temp_dir.path().join("second-blocked.txt");
         std::fs::write(&blocked_file, "secret").expect("create blocked file");
+        std::fs::write(&second_blocked_file, "dummy secret").expect("create second blocked file");
         let blocked_file =
             AbsolutePathBuf::from_absolute_path(&blocked_file).expect("absolute blocked file");
         let policy = FileSystemSandboxPolicy::restricted(vec![
@@ -2864,20 +2872,46 @@ mod tests {
                 access: FileSystemAccessMode::Deny,
                 missing_path_behavior: None,
             },
+            FileSystemSandboxEntry {
+                path: AbsolutePathBuf::from_absolute_path(&second_blocked_file)
+                    .expect("absolute second blocked file")
+                    .into(),
+                access: FileSystemAccessMode::Deny,
+                missing_path_behavior: None,
+            },
         ]);
 
         let args = create_filesystem_args(&policy, temp_dir.path(), BwrapOptions::default())
             .expect("filesystem args");
-        let blocked_file_str = path_to_string(blocked_file.as_path());
-
-        assert_eq!(args.preserved_files.len(), 1);
+        assert_eq!(args.preserved_files.len(), 2);
+        assert_bind_data_uses_distinct_preserved_fds(&args);
         assert!(args.synthetic_mount_targets.is_empty());
-        assert!(args.args.windows(5).any(|window| {
-            window[0] == "--perms"
-                && window[1] == "000"
-                && window[2] == "--ro-bind-data"
-                && window[4] == blocked_file_str
-        }));
+        for blocked_file in [blocked_file.as_path(), second_blocked_file.as_path()] {
+            assert!(args.args.windows(5).any(|window| {
+                window[0] == "--perms"
+                    && window[1] == "000"
+                    && window[2] == "--ro-bind-data"
+                    && window[4] == path_to_string(blocked_file)
+            }));
+        }
+    }
+
+    fn assert_bind_data_uses_distinct_preserved_fds(args: &BwrapArgs) {
+        let mount_fds = args
+            .args
+            .windows(3)
+            .filter(|window| window[0] == "--ro-bind-data")
+            .map(|window| window[1].parse::<i32>().expect("bind-data fd"))
+            .collect::<Vec<_>>();
+        let distinct_fds = mount_fds.iter().copied().collect::<HashSet<_>>();
+        assert_eq!(mount_fds.len(), distinct_fds.len());
+        assert_eq!(
+            distinct_fds,
+            args.preserved_files
+                .iter()
+                .map(AsRawFd::as_raw_fd)
+                .collect()
+        );
     }
 
     #[test]
@@ -2978,7 +3012,7 @@ mod tests {
     }
 
     fn ripgrep_available() -> bool {
-        Command::new("rg")
+        Command::new(GLOB_SCAN_PROGRAM)
             .arg("--version")
             .output()
             .is_ok_and(|output| output.status.success())
@@ -3036,13 +3070,6 @@ mod tests {
 
     fn synthetic_mount_target_paths(args: &BwrapArgs) -> Vec<PathBuf> {
         args.synthetic_mount_targets
-            .iter()
-            .map(|target| target.path().to_path_buf())
-            .collect()
-    }
-
-    fn protected_create_target_paths(args: &BwrapArgs) -> Vec<PathBuf> {
-        args.protected_create_targets
             .iter()
             .map(|target| target.path().to_path_buf())
             .collect()

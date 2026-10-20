@@ -4,15 +4,16 @@
 //! Recovery closes the cached pool before backing up and recreating the database,
 //! and excludes new handles until the replacement's deletion tombstones are saved.
 
-use super::DATABASE_FILE;
 use super::LocalAgentMessageBoard;
-use super::POOLS;
-use super::SCHEMA;
 use super::invalid;
+use super::pool::DATABASE_FILE;
+use super::pool::POOLS;
+use super::pool::SCHEMA;
 use super::storage_error;
 use codex_protocol::SessionId;
 use codex_protocol::error::Result;
 use codex_state::SqliteConfig;
+use codex_state::SqlitePoolWriteExt;
 use sqlx::Sqlite;
 use sqlx::Transaction;
 use std::sync::Weak;
@@ -38,7 +39,6 @@ impl LocalAgentMessageBoard {
         let pool = match sqlite.open_read_write_pool(&path).await {
             Ok(pool) => pool,
             Err(error) => {
-                let error = error.into();
                 if !codex_state::is_sqlite_corruption_error(&error) {
                     return Err(storage_error(error));
                 }
@@ -63,10 +63,7 @@ impl LocalAgentMessageBoard {
             .execute(&pool)
             .await
             .map_err(storage_error)?;
-        let mut tx = pool
-            .begin_with("BEGIN IMMEDIATE")
-            .await
-            .map_err(storage_error)?;
+        let mut tx = pool.begin_immediate().await.map_err(storage_error)?;
         for root in roots {
             sqlx::query("INSERT OR IGNORE INTO deleted_boards (board) VALUES (?)")
                 .bind(root.to_string())
@@ -78,6 +75,7 @@ impl LocalAgentMessageBoard {
                 "DELETE FROM subscription_opt_outs WHERE board=?",
                 "DELETE FROM posts WHERE board=?",
                 "DELETE FROM channels WHERE board=?",
+                "DELETE FROM board_templates WHERE board=?",
             ] {
                 sqlx::query(statement)
                     .bind(root.to_string())
@@ -92,11 +90,7 @@ impl LocalAgentMessageBoard {
     }
 
     pub(super) async fn begin_write(&self) -> Result<Transaction<'_, Sqlite>> {
-        let mut tx = self
-            .pool
-            .begin_with("BEGIN IMMEDIATE")
-            .await
-            .map_err(storage_error)?;
+        let mut tx = self.pool.begin_immediate().await.map_err(storage_error)?;
         let deleted: bool =
             sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM deleted_boards WHERE board=?)")
                 .bind(self.identity.to_string())

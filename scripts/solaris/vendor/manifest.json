@@ -1,0 +1,37 @@
+{
+  "rusty_v8_version": "152.2.0",
+  "v8_version": "15.2.124.1",
+  "target": "x86_64-unknown-illumos",
+  "source_crate_sha256": "a10fe1a92da5c32c7c7f838ce36c0ccfcfd5edf0865b58bdde820aa64cea9888",
+  "codex_upstream_commit": "8196bcdc18",
+  "build_date": "2026-10-20",
+  "build_host": "aarch64-apple-darwin",
+  "llvm_version": "23.1.1",
+  "bindgen_version": "0.72.1",
+  "sysroot_os": "OmniOS r151058",
+  "features": {
+    "sandbox": false,
+    "pointer_compression": false,
+    "external_code_space": false,
+    "i18n": true,
+    "webassembly": true,
+    "turbofan": true,
+    "maglev": false,
+    "temporal": false
+  },
+  "patch_sha256": {
+    "patches/v8_array_sort_elements_kind.patch": "2a07c63714a17d7d4e4477bfe6d0673c8c3720ed13cd5a0f54bb317ae542709e",
+    "scripts/solaris/v8-152.2.0-illumos.patch": "54388020206711cbeb8996e0200550a03b40985b0be9a592d033402bd3260532",
+    "scripts/solaris/v8-152.2.0-build.patch": "374a9f3e35d098d25383988fb00691c16ae6944ec645e1e41ff6754b4c951ef6"
+  },
+  "sha256": {
+    "librusty_v8.a": "20c293507a90e0c7d3311856ed0d973b5f94f4c40ed59955dc8095ca482ba0f9",
+    "src_binding_prefixed.rs": "5d0c33eb00f214ed898ee9700b866e21985ae5f4261e892c4d7f06e06964a8bd"
+  },
+  "binding_postprocess": {
+    "script": "scripts/solaris/normalize-v8-bindings.py",
+    "sha256": "f4909458c6201111b32273d252eff2394ecd5df2d0d08495f127c964d2546162",
+    "reference": "v8-152.2.0/gen/src_binding_release_x86_64-unknown-linux-gnu.rs"
+  },
+  "solaris_static_tls_alignment": 16
+}

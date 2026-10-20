@@ -1,5 +1,6 @@
 //! Shared SQLite connection configuration.
-//! Writable pools preserve existing vacuum modes and report initialization errors to callers.
+//! Writable pools preserve the journal and vacuum modes of initialized databases.
+//! Startup retries SQLITE_BUSY and reports other errors to callers.
 
 #![expect(
     clippy::disallowed_methods,
@@ -22,8 +23,20 @@ use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::sqlite::SqliteSynchronous;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
+use tokio::sync::OnceCell;
+
+mod busy_retry;
+mod validation;
+
+pub use busy_retry::SqlitePoolWriteExt;
+pub(crate) use busy_retry::SqliteWriteQueryExt;
+pub(crate) use busy_retry::retry_on_busy;
+use validation::SqliteQuickCheckManager;
+
+const DEFAULT_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 const LOGS_DB_FILENAME: &str = "logs_2.sqlite";
 const GOALS_DB_FILENAME: &str = "goals_1.sqlite";
@@ -31,6 +44,12 @@ const MEMORIES_DB_FILENAME: &str = "memories_1.sqlite";
 const QUEUE_DB_FILENAME: &str = "queue_1.sqlite";
 const STATE_DB_FILENAME: &str = "state_5.sqlite";
 const THREAD_HISTORY_DB_FILENAME: &str = "thread_history_1.sqlite";
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum RecoveryMode {
+    BackupAndRebuild,
+    Unavailable,
+}
 
 #[derive(Clone, Copy)]
 struct RuntimeDbSpec {
@@ -42,6 +61,7 @@ struct RuntimeDbSpec {
     /// Opt in only after auditing writers for deferred read-to-write upgrades:
     /// an intervening reclamation commit can make those fail with SQLITE_BUSY_SNAPSHOT.
     background_reclamation: bool,
+    recovery: RecoveryMode,
 }
 
 impl RuntimeDbSpec {
@@ -57,6 +77,7 @@ const STATE_DB: RuntimeDbSpec = RuntimeDbSpec {
     open_phase: "open_state",
     migrate_phase: "migrate_state",
     background_reclamation: false,
+    recovery: RecoveryMode::BackupAndRebuild,
 };
 
 const LOGS_DB: RuntimeDbSpec = RuntimeDbSpec {
@@ -67,6 +88,7 @@ const LOGS_DB: RuntimeDbSpec = RuntimeDbSpec {
     migrate_phase: "migrate_logs",
     // Log transactions write before reading, so they already hold the writer lock.
     background_reclamation: true,
+    recovery: RecoveryMode::BackupAndRebuild,
 };
 
 const GOALS_DB: RuntimeDbSpec = RuntimeDbSpec {
@@ -76,6 +98,7 @@ const GOALS_DB: RuntimeDbSpec = RuntimeDbSpec {
     open_phase: "open_goals",
     migrate_phase: "migrate_goals",
     background_reclamation: false,
+    recovery: RecoveryMode::BackupAndRebuild,
 };
 
 const MEMORIES_DB: RuntimeDbSpec = RuntimeDbSpec {
@@ -85,6 +108,7 @@ const MEMORIES_DB: RuntimeDbSpec = RuntimeDbSpec {
     open_phase: "open_memories",
     migrate_phase: "migrate_memories",
     background_reclamation: false,
+    recovery: RecoveryMode::BackupAndRebuild,
 };
 
 const MEMORIES_V2_DB: RuntimeDbSpec = RuntimeDbSpec {
@@ -101,6 +125,7 @@ const QUEUE_DB: RuntimeDbSpec = RuntimeDbSpec {
     open_phase: "open_queue",
     migrate_phase: "migrate_queue",
     background_reclamation: false,
+    recovery: RecoveryMode::BackupAndRebuild,
 };
 
 const THREAD_HISTORY_DB: RuntimeDbSpec = RuntimeDbSpec {
@@ -110,6 +135,7 @@ const THREAD_HISTORY_DB: RuntimeDbSpec = RuntimeDbSpec {
     open_phase: "open_thread_history",
     migrate_phase: "migrate_thread_history",
     background_reclamation: false,
+    recovery: RecoveryMode::Unavailable,
 };
 
 const RUNTIME_DBS: [RuntimeDbSpec; 7] = [
@@ -130,14 +156,31 @@ pub struct RuntimeDbPath {
 }
 
 /// Resolved configuration shared by all Codex SQLite connections.
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// Clones share filesystem probes and quick-check attempts; a new config checks independently.
+#[derive(Clone, Debug)]
 pub struct SqliteConfig {
     sqlite_home: AbsolutePathBuf,
+    is_nfs: Arc<OnceCell<bool>>,
+    quick_check_manager: SqliteQuickCheckManager,
 }
+
+// Cached filesystem information and validation history are operational state,
+// not part of configuration equality.
+impl PartialEq for SqliteConfig {
+    fn eq(&self, other: &Self) -> bool {
+        self.sqlite_home == other.sqlite_home
+    }
+}
+
+impl Eq for SqliteConfig {}
 
 impl SqliteConfig {
     pub fn from_sqlite_home(sqlite_home: AbsolutePathBuf) -> Self {
-        Self { sqlite_home }
+        Self {
+            sqlite_home,
+            is_nfs: Arc::new(OnceCell::new()),
+            quick_check_manager: SqliteQuickCheckManager::new(),
+        }
     }
 
     pub fn new_for_testing(sqlite_home: AbsolutePathBuf) -> Self {
@@ -146,6 +189,20 @@ impl SqliteConfig {
 
     pub fn home(&self) -> &Path {
         self.sqlite_home.as_path()
+    }
+
+    /// Detects if the sqlite_home directory is under the NFS mount (once per the lifetime)
+    pub async fn is_nfs(&self) -> anyhow::Result<bool> {
+        self.is_nfs
+            .get_or_try_init(|| async {
+                let sqlite_home = self.home().to_path_buf();
+                Ok(
+                    tokio::task::spawn_blocking(move || codex_file_system::is_nfs(&sqlite_home))
+                        .await??,
+                )
+            })
+            .await
+            .copied()
     }
 
     /// Return the path to the primary state database.
@@ -269,9 +326,8 @@ impl SqliteConfig {
         let path = spec.path(self.home());
         let started = Instant::now();
         let pool_result = self
-            .open_read_write_pool(&path)
-            .await
-            .map_err(anyhow::Error::from);
+            .open_read_write_pool_with_spec(path.as_path(), Some(spec), telemetry_override)
+            .await;
         telemetry::record_init_result(
             telemetry_override,
             spec.kind,
@@ -307,61 +363,63 @@ impl SqliteConfig {
     }
 
     /// Open a writable Codex SQLite database, creating it if necessary.
-    pub async fn open_read_write_pool(&self, path: &Path) -> Result<SqlitePool, Error> {
+    pub async fn open_read_write_pool(&self, path: &Path) -> anyhow::Result<SqlitePool> {
+        self.open_read_write_pool_with_spec(
+            path, /*recover_spec*/ None, /*telemetry_override*/ None,
+        )
+        .await
+    }
+
+    async fn open_read_write_pool_with_spec(
+        &self,
+        path: &Path,
+        recover_spec: Option<RuntimeDbSpec>,
+        telemetry_override: Option<&dyn DbTelemetry>,
+    ) -> anyhow::Result<SqlitePool> {
+        let recovery = recover_spec.map_or(RecoveryMode::Unavailable, |spec| spec.recovery);
         let options = SqliteConnectOptions::new()
             .filename(path)
             .create_if_missing(true)
             .synchronous(SqliteSynchronous::Normal)
-            .busy_timeout(Duration::from_secs(5))
+            .busy_timeout(DEFAULT_BUSY_TIMEOUT)
             .log_statements(LevelFilter::Off);
-        // SQLx retries after_connect errors, eventually replacing them with PoolTimedOut.
-        // Return the first initialization error directly while opening this pool.
-        let (init_error_tx, mut init_error_rx) = tokio::sync::mpsc::channel(/*buffer*/ 1);
-        let pool_options = SqlitePoolOptions::new().max_connections(5).after_connect(
-            move |connection, _metadata| {
-                let init_error_tx = init_error_tx.clone();
-                Box::pin(async move {
-                    let result = async {
-                        let mode: i64 = sqlx::query_scalar("PRAGMA auto_vacuum")
-                            .fetch_one(&mut *connection)
-                            .await?;
-                        // The setter takes the writer lock even when the mode is unchanged.
-                        // Initialize before WAL creates the first database page; preserve
-                        // existing modes, including FULL, without taking the writer lock.
-                        let empty = if mode == 0 {
-                            sqlx::query_scalar::<_, bool>(
-                                "SELECT NOT EXISTS (SELECT 1 FROM sqlite_schema)",
-                            )
-                            .fetch_one(&mut *connection)
-                            .await?
-                        } else {
-                            false
-                        };
-                        if empty {
-                            sqlx::query("PRAGMA auto_vacuum = INCREMENTAL")
-                                .execute(&mut *connection)
-                                .await?;
-                        }
-                        sqlx::query("PRAGMA journal_mode = WAL")
-                            .execute(connection)
-                            .await?;
-                        Ok(())
-                    }
-                    .await;
-                    result.map_err(|error| match init_error_tx.try_send(error) {
-                        // The opener owns the original error and cancels connection retries.
-                        Ok(()) => Error::PoolClosed,
-                        // After opening, lazy connections retain SQLx's normal error handling.
-                        Err(error) => error.into_inner(),
-                    })
-                })
-            },
-        );
-        tokio::select! {
-            biased;
-            Some(error) = init_error_rx.recv() => Err(error),
-            result = pool_options.connect_with(options) => result,
+        // Each failed attempt closes its pool before initialization is retried.
+        let connect = || async { connect_once(&options).await.map_err(anyhow::Error::from) };
+        let pool = retry_on_busy(connect).await?;
+        let validation_result = self
+            .quick_check_manager
+            .quick_check_once(
+                &pool,
+                path,
+                // Limit startup validation to 100 ms.
+                Duration::from_millis(/*millis*/ 100),
+            )
+            .await;
+
+        let Ok(result) = validation_result else {
+            pool.close().await;
+            return validation_result.map(|_| pool);
+        };
+
+        if result == validation::QuickCheckOutcome::CorruptedNeedsFixed {
+            tracing::error!(database = %path.display(), "SQLite quick check detected corruption");
+            telemetry::record_corruption(telemetry_override, recover_spec.map(|spec| spec.kind));
+            if recovery == RecoveryMode::BackupAndRebuild {
+                pool.close().await;
+                let backups = crate::backup_runtime_db_for_fresh_start(path).await?;
+                for backup in backups {
+                    tracing::warn!(
+                        database = %backup.original_path.display(),
+                        backup = %backup.backup_path.display(),
+                        "Preserved corrupt SQLite database before rebuilding"
+                    );
+                }
+
+                return retry_on_busy(connect).await;
+            }
         }
+
+        Ok(pool)
     }
 
     /// Open an existing Codex SQLite database without creating or modifying it.
@@ -383,6 +441,90 @@ impl SqliteConfig {
             .connect_with(options)
             .await
     }
+}
+
+async fn connect_once(options: &SqliteConnectOptions) -> Result<SqlitePool, Error> {
+    // SQLx retries after_connect errors, eventually replacing them with PoolTimedOut.
+    // Return the first initialization error directly while opening this pool.
+    let (init_error_tx, mut init_error_rx) = tokio::sync::mpsc::channel(/*buffer*/ 1);
+    let pool_options =
+        SqlitePoolOptions::new()
+            .max_connections(5)
+            .after_connect(move |connection, _metadata| {
+                let init_error_tx = init_error_tx.clone();
+                Box::pin(async move {
+                    let result = async {
+                        let journal: String = sqlx::query_scalar("PRAGMA journal_mode")
+                            .fetch_one(&mut *connection)
+                            .await?;
+                        if journal == "delete" {
+                            // If the filesystem honors sync requests, EXTRA syncs the directory
+                            // after SQLite deletes a rollback journal.
+                            sqlx::query("PRAGMA synchronous = EXTRA")
+                                .execute(connection)
+                                .await?;
+                        }
+                        Ok(())
+                    }
+                    .await;
+                    result.map_err(|error| match init_error_tx.try_send(error) {
+                        // The opener owns the original error and cancels connection retries.
+                        Ok(()) => Error::PoolClosed,
+                        // After opening, lazy connections retain SQLx's normal error handling.
+                        Err(error) => error.into_inner(),
+                    })
+                })
+            });
+    let pool = tokio::select! {
+        biased;
+        Some(error) = init_error_rx.recv() => Err(error),
+        result = pool_options.connect_with(options.clone()) => result,
+    }?;
+    // Database settings persist on disk.
+    // Initialize these settings once before callers can use the pool.
+    // Connections that open later need only settings that apply to each connection.
+    let initialized: Result<(), Error> = async {
+        let mut connection = pool.acquire().await?;
+        // Auto-vacuum alone can write a header to disk.
+        // If creation stops before the schema exists, startup must initialize the file.
+        let empty =
+            sqlx::query_scalar::<_, bool>("SELECT NOT EXISTS (SELECT 1 FROM sqlite_schema)")
+                .fetch_one(&mut *connection)
+                .await?;
+        if empty {
+            let mode: i64 = sqlx::query_scalar("PRAGMA auto_vacuum")
+                .fetch_one(&mut *connection)
+                .await?;
+            if mode == 0 {
+                sqlx::query("PRAGMA auto_vacuum = INCREMENTAL")
+                    .execute(&mut *connection)
+                    .await?;
+            }
+            sqlx::query("PRAGMA journal_mode = WAL")
+                .execute(&mut *connection)
+                .await?;
+        }
+        // Another process can initialize WAL after this connection selects EXTRA.
+        // Apply NORMAL to WAL even if that process already created the schema.
+        let journal: String = sqlx::query_scalar("PRAGMA journal_mode")
+            .fetch_one(&mut *connection)
+            .await?;
+        if journal == "wal" {
+            sqlx::query("PRAGMA synchronous = NORMAL")
+                .execute(&mut *connection)
+                .await?;
+        }
+        // Wait for the connection to return to the pool before startup requests it again.
+        // An asynchronous drop can otherwise cause the pool to open a second connection.
+        connection.return_to_pool().await;
+        Ok(())
+    }
+    .await;
+    if let Err(error) = initialized {
+        pool.close().await;
+        return Err(error);
+    }
+    Ok(pool)
 }
 
 #[cfg(test)]

@@ -1,0 +1,79 @@
+--- a/build/config/apple/sdk_info.py
++++ b/build/config/apple/sdk_info.py
+@@ -58,6 +58,15 @@
+     settings['xcode_build'] = version_plist['ProductBuildVersion']
+     return
+ 
++  developer = subprocess.check_output(['xcode-select', '-print-path']).decode().strip()
++  if developer.endswith('CommandLineTools'):
++    metadata = subprocess.check_output(['pkgutil', '--pkg-info', 'com.apple.pkg.CLTools_Executables']).decode()
++    version = next(line.split(': ', 1)[1] for line in metadata.splitlines() if line.startswith('version: '))
++    settings['xcode_version'] = FormatVersion('.'.join(version.split('.')[:3]))
++    settings['xcode_version_int'] = int(settings['xcode_version'])
++    settings['xcode_version_verbatim'] = version
++    settings['xcode_build'] = version
++    return
+   lines = subprocess.check_output(['xcodebuild',
+                                    '-version']).decode('UTF-8').splitlines()
+   version_verbatim = lines[0].split()[-1]
+@@ -81,9 +90,7 @@
+   settings['sdk_version'] = subprocess.check_output(
+       ['xcrun', '-sdk', platform,
+        '--show-sdk-version']).decode('UTF-8').strip()
+-  settings['sdk_platform_path'] = subprocess.check_output(
+-      ['xcrun', '-sdk', platform,
+-       '--show-sdk-platform-path']).decode('UTF-8').strip()
++  settings['sdk_platform_path'] = settings['sdk_path']
+   settings['sdk_build'] = subprocess.check_output(
+       ['xcrun', '-sdk', platform,
+        '--show-sdk-build-version']).decode('UTF-8').strip()
+--- a/build/mac/find_sdk.py
++++ b/build/mac/find_sdk.py
+@@ -72,6 +72,8 @@
+   sdk_dir = os.path.join(
+       dev_dir, 'Platforms/MacOSX.platform/Developer/SDKs')
+ 
++  if not os.path.isdir(sdk_dir) and dev_dir.endswith('CommandLineTools'):
++    sdk_dir = os.path.join(dev_dir, 'SDKs')
+   if not os.path.isdir(sdk_dir):
+     raise SdkError('Install Xcode, launch it, accept the license ' +
+       'agreement, and run `sudo xcode-select -s /path/to/Xcode.app` ' +
+@@ -93,7 +95,7 @@
+ 
+   if options.print_bin_path:
+     bin_path = 'Toolchains/XcodeDefault.xctoolchain/usr/bin/'
+-    print(os.path.join(dev_dir, bin_path))
++    print(os.path.join(dev_dir, 'usr/bin/' if dev_dir.endswith('CommandLineTools') else bin_path))
+ 
+   if options.print_sdk_build:
+     system_version_plist = os.path.join(sdk_path,
+--- a/build/config/clang/BUILD.gn
++++ b/build/config/clang/BUILD.gn
+@@ -243,6 +243,7 @@
+ 
+ # Adds a dependency on the Clang runtime library clang_rt.builtins.
+ clang_lib("compiler_builtins") {
++  if (current_toolchain != "//build/toolchain/illumos:x64") {
+   if (is_mac) {
+     libname = "osx"
+   } else if (is_ios) {
+@@ -270,6 +271,7 @@
+   } else if (current_cpu != "ppc64" && current_cpu != "s390x") {
+     libname = "builtins"
+   }
++  }
+ }
+ 
+ # Adds a dependency on the Clang runtime library clang_rt.profile.
+--- a/buildtools/third_party/libc++abi/BUILD.gn
++++ b/buildtools/third_party/libc++abi/BUILD.gn
+@@ -62,7 +62,8 @@
+   # TODO(crbug.com/469458284): Remove this once libc++abi is rolled again.
+   defines += [ "_LIBCPP_CONSTINIT=constinit" ]
+ 
+-  if (is_linux || is_android) {
++  if ((is_linux || is_android) &&
++      current_toolchain != "//build/toolchain/illumos:x64") {
+     defines += [ "_LIBCXXABI_USE_FUTEX" ]
+   }
+ 

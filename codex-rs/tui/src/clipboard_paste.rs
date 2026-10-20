@@ -10,11 +10,8 @@ use tempfile::Builder;
 #[derive(Debug, Clone)]
 pub enum PasteImageError {
     ClipboardUnavailable(String),
-    #[cfg(not(any(target_os = "android", target_os = "illumos", target_os = "solaris")))]
     NoImage(String),
-    #[cfg(not(any(target_os = "android", target_os = "illumos", target_os = "solaris")))]
     EncodeFailed(String),
-    #[cfg(not(any(target_os = "android", target_os = "illumos", target_os = "solaris")))]
     IoError(String),
 }
 
@@ -22,11 +19,8 @@ impl std::fmt::Display for PasteImageError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             PasteImageError::ClipboardUnavailable(msg) => write!(f, "clipboard unavailable: {msg}"),
-            #[cfg(not(any(target_os = "android", target_os = "illumos", target_os = "solaris")))]
             PasteImageError::NoImage(msg) => write!(f, "no image on clipboard: {msg}"),
-            #[cfg(not(any(target_os = "android", target_os = "illumos", target_os = "solaris")))]
             PasteImageError::EncodeFailed(msg) => write!(f, "could not encode image: {msg}"),
-            #[cfg(not(any(target_os = "android", target_os = "illumos", target_os = "solaris")))]
             PasteImageError::IoError(msg) => write!(f, "io error: {msg}"),
         }
     }
@@ -84,9 +78,13 @@ pub fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageErro
         img
     } else {
         let _span = tracing::debug_span!("get_image").entered();
-        let img = cb
-            .get_image()
-            .map_err(|e| PasteImageError::NoImage(e.to_string()))?;
+        let img = cb.get_image().map_err(|e| {
+            if cfg!(windows) && !matches!(e, arboard::Error::ContentNotAvailable) {
+                PasteImageError::ClipboardUnavailable(e.to_string())
+            } else {
+                PasteImageError::NoImage(e.to_string())
+            }
+        })?;
         let w = img.width as u32;
         let h = img.height as u32;
         tracing::debug!("clipboard image opened from image: {}x{}", w, h);
@@ -229,6 +227,12 @@ fn try_dump_windows_clipboard_image() -> Option<String> {
         }
     }
     None
+}
+
+/// Return the platform's explicit unsupported error when no native clipboard exists.
+#[cfg(any(target_os = "android", target_os = "illumos", target_os = "solaris"))]
+pub fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageError> {
+    Err(unsupported_image_paste_error())
 }
 
 #[cfg(any(target_os = "android", target_os = "illumos", target_os = "solaris"))]

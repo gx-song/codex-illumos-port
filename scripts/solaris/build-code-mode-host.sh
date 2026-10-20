@@ -33,6 +33,33 @@ if [[ ! -f "${binding}" ]]; then
   exit 2
 fi
 
+# Keep the archive and generated layout bindings tied to the workspace V8 API.
+# A stale archive can link partially while exposing incompatible C++ object layouts.
+python3 - "${repo_root}/codex-rs/Cargo.toml" "${vendor_dir}" <<'VERIFY_V8'
+import hashlib
+import json
+import re
+import sys
+from pathlib import Path
+
+workspace = Path(sys.argv[1]).read_text()
+vendor = Path(sys.argv[2])
+manifest_path = vendor / "manifest.json"
+if not manifest_path.is_file():
+    sys.exit("Vendored illumos V8 manifest is missing; rebuild the archive and bindings.")
+manifest = json.loads(manifest_path.read_text())
+version = re.search(r'^v8\s*=\s*"=?([^"\n]+)"', workspace, re.MULTILINE)
+if version is None or version.group(1) != manifest["rusty_v8_version"]:
+    sys.exit("Vendored illumos V8 does not match Cargo.toml; rebuild the archive and bindings.")
+for name, expected in manifest["sha256"].items():
+    digest = hashlib.sha256()
+    with (vendor / name).open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    if digest.hexdigest() != expected:
+        sys.exit(f"Vendored V8 checksum mismatch: {name}")
+VERIFY_V8
+
 profile=""
 if [[ "${1:-}" == "--release" ]]; then
   profile="--release"

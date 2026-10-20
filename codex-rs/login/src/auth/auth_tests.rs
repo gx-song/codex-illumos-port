@@ -8,6 +8,7 @@ use codex_protocol::auth::KnownPlan as InternalKnownPlan;
 use codex_protocol::auth::PlanType as InternalPlanType;
 use codex_protocol::protocol::SessionSource;
 
+use anyhow::Context;
 use base64::Engine;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ModelProviderAuthInfo;
@@ -59,8 +60,8 @@ fn header_auth_exposes_a_valid_chatgpt_account_id() {
 }
 
 #[tokio::test]
-async fn refresh_without_id_token() {
-    let codex_home = tempdir().unwrap();
+async fn refresh_without_id_token() -> anyhow::Result<()> {
+    let codex_home = tempdir()?;
     let fake_jwt = write_auth_file(
         AuthFileParams {
             openai_api_key: None,
@@ -68,26 +69,59 @@ async fn refresh_without_id_token() {
             chatgpt_account_id: None,
         },
         codex_home.path(),
-    )
-    .expect("failed to write auth file");
+    )?;
 
     let storage = create_auth_storage(
         codex_home.path().to_path_buf(),
         AuthCredentialsStoreMode::File,
         AuthKeyringBackendKind::default(),
     );
+    let provenance = AccountOAuthProvenance {
+        issuer: "https://idp.example".to_string(),
+        client_id: "codex-client".to_string(),
+    };
     let updated = super::persist_tokens(
         &storage,
+        "test-refresh-token",
+        Some(provenance.clone()),
         /*id_token*/ None,
         Some("new-access-token".to_string()),
         Some("new-refresh-token".to_string()),
-    )
-    .expect("update_tokens should succeed");
+    )?;
 
-    let tokens = updated.tokens.expect("tokens should exist");
+    let tokens = updated.tokens.context("persisted auth is missing tokens")?;
     assert_eq!(tokens.id_token.raw_jwt, fake_jwt);
     assert_eq!(tokens.access_token, "new-access-token");
     assert_eq!(tokens.refresh_token, "new-refresh-token");
+    assert_eq!(tokens.oauth_provenance, Some(provenance.clone()));
+
+    let updated = super::persist_tokens(
+        &storage,
+        "new-refresh-token",
+        Some(provenance.clone()),
+        /*id_token*/ None,
+        Some("later-access-token".to_string()),
+        /*refresh_token*/ None,
+    )?;
+    let tokens = updated.tokens.context("persisted auth is missing tokens")?;
+    assert_eq!(tokens.refresh_token, "new-refresh-token");
+    assert_eq!(tokens.oauth_provenance, Some(provenance.clone()));
+
+    // A response without a rotated token cannot establish authority for a token that
+    // another writer installed after this refresh began.
+    let updated = super::persist_tokens(
+        &storage,
+        "superseded-refresh-token",
+        Some(provenance),
+        /*id_token*/ None,
+        Some("latest-access-token".to_string()),
+        /*refresh_token*/ None,
+    )?;
+    assert_eq!(storage.load()?, Some(updated.clone()));
+    let tokens = updated.tokens.context("persisted auth is missing tokens")?;
+    assert_eq!(tokens.refresh_token, "new-refresh-token");
+    assert_eq!(tokens.oauth_provenance, None);
+    Ok(())
 }
 
 #[test]
@@ -1064,6 +1098,8 @@ async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
                 },
                 access_token: "test-access-token".to_string(),
                 refresh_token: "test-refresh-token".to_string(),
+                oauth_provenance: None,
+                login_owner_id: None,
                 account_id: None,
             }),
             last_refresh: Some(last_refresh),
@@ -1654,7 +1690,7 @@ impl ProviderAuthScript {
         #[cfg(unix)]
         let (command, args) = {
             let script_path = tempdir.path().join("print-token.sh");
-            std::fs::write(
+            codex_utils_cargo_bin::write_executable(
                 &script_path,
                 r#"#!/bin/sh
 if [ -f fail-once ]; then
@@ -1667,12 +1703,6 @@ tail -n +2 tokens.txt > tokens.next
 mv tokens.next tokens.txt
 "#,
             )?;
-            let mut permissions = std::fs::metadata(&script_path)?.permissions();
-            {
-                use std::os::unix::fs::PermissionsExt;
-                permissions.set_mode(0o755);
-            }
-            std::fs::set_permissions(&script_path, permissions)?;
             ("./print-token.sh".to_string(), Vec::new())
         };
 
@@ -1721,18 +1751,12 @@ move /y tokens.next tokens.txt >nul
         #[cfg(unix)]
         let (command, args) = {
             let script_path = tempdir.path().join("fail.sh");
-            std::fs::write(
+            codex_utils_cargo_bin::write_executable(
                 &script_path,
                 r#"#!/bin/sh
 exit 1
 "#,
             )?;
-            let mut permissions = std::fs::metadata(&script_path)?.permissions();
-            {
-                use std::os::unix::fs::PermissionsExt;
-                permissions.set_mode(0o755);
-            }
-            std::fs::set_permissions(&script_path, permissions)?;
             ("./fail.sh".to_string(), Vec::new())
         };
 

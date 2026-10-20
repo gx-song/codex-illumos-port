@@ -33,14 +33,14 @@ archives for it. This port **now produces** an illumos `codex-code-mode-host`
 by cross-building the V8 static library for `x86_64-unknown-illumos` **once**,
 vendoring the archive in this repository, and pointing the `v8` crate build
 script at it via the official `RUSTY_V8_ARCHIVE` override (plus
-`RUSTY_V8_SRC_BINDING_PATH` for the generated `src/string.rs` binding). The
-cross build uses the Linux-host toolchain wrappers under `scripts/solaris/cross`
-and a patched illumos sysroot.
+`RUSTY_V8_SRC_BINDING_PATH` for the generated Rust ABI bindings). The
+cross build uses LLVM/Clang and a private patched copy of the illumos sysroot.
 
-The one-time V8 cross build requires a Linux host with the LLVM/Clang 22
-toolchain and the illumos sysroot. Once `librusty_v8.a` is vendored, rebuilding
-`codex-code-mode-host` for illumos only needs Cargo and the archive — no Linux
-host is required at rebuild time.
+The V8 152.2.0 cross build uses macOS arm64, LLVM/Clang 23.1.1, GN, Ninja,
+and the illumos sysroot. V8 also builds host tools before producing target
+objects. Once the archive and ABI bindings are vendored, ordinary host builds
+use `build-code-mode-host.sh`; its manifest check rejects stale files. See
+[V8_BUILD.md](V8_BUILD.md) for provenance and configuration.
 
 On Linux/macOS build hosts, `cargo build --release -p codex-code-mode-host`
 uses the published non-sandboxed `rusty_v8` release archives; upstream builds
@@ -48,8 +48,8 @@ its sandbox-enabled V8 archives with Bazel and does not publish them. The
 port's `codex-code-mode-runtime` therefore makes `v8_enable_sandbox` an
 opt-in `v8-sandbox` feature.
 
-Source changes required for the V8 cross build (kept in the vendored V8 source
-tree, not in this repository):
+Source changes required for the V8 cross build (recorded in
+`v8-152.2.0-illumos.patch` and [V8_BUILD.md](V8_BUILD.md)):
 
 - `iso/math_iso.h`, `iso/stdlib_iso.h`, `math.h`, `stdlib.h`: under Clang,
   skip the Solaris `namespace std` block so libc++ owns `std` (libc++ sources
@@ -64,6 +64,8 @@ tree, not in this repository):
   tm` lacks `tm_zone` / `tm_gmtoff`).
 - `v8/src/trap-handler/handler-inside-posix.h`: accept `V8_OS_SOLARIS` for the
   signal selection (runtime stub is empty).
+- `v8/src/common/assert-scope.cc`: align initialized Solaris TLS data to 16
+  bytes so LLD's relaxed offsets match the Solaris runtime's static TLS layout.
 
 Further dependency removal was stopped once the executable built and passed
 runtime checks. Smaller dependency graphs are not useful if they create a
@@ -111,6 +113,19 @@ return explicit unsupported errors where callers require a stable interface.
 Login and history UI browser-launch calls are compiled out on illumos/Solaris.
 The SSH TUI can still display URLs for manual use where the surrounding flow
 supports that behavior.
+
+### Native terminal selection
+
+Fullscreen and transcript pager screens leave mouse selection to the terminal.
+They disable pointer reporting and alternate-scroll translation, so ordinary
+terminal selection and the terminal's copy shortcut remain available over SSH.
+Specialized overlays such as usage charts can still request pointer reporting.
+
+Plain Ctrl+C is reserved for cancellation rather than copying a selection,
+including in keyboard selection and semantic copy modes. Enter, Ctrl+Insert,
+and the other explicit transcript copy gestures remain available. Regression
+coverage checks interruption through the real app input route, emitted mouse
+policies, and the selection footer snapshots.
 
 ### Clipboard
 

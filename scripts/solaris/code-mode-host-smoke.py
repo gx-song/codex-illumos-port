@@ -6,14 +6,13 @@ Read-only crash-regression check for the V8 brk/mmap heap-conflict fix
 
 It spawns the host exactly as Codex does (LD_PRELOAD_64=libumem.so with
 UMEM_OPTIONS=backend=mmap), completes the handshake, opens a session, executes
-a JavaScript cell, and waits for the result. A clean Result response proves the
-V8 Isolate initialized and ran without the prior std::bad_alloc abort.
+a JavaScript cell, and waits for the result. The cell exercises array sorting,
+typed-array allocation, ICU date formatting and promise settlement. A clean
+Result response also rules out the prior std::bad_alloc initialization abort.
 
 Usage:
   python3 scripts/solaris/code-mode-host-smoke.py [HOST_BINARY]
 """
-
-from __future__ import annotations
 
 import json
 import os
@@ -21,6 +20,7 @@ import select
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 
 MAX_FRAME_BYTES = 64 * 1024 * 1024
@@ -58,7 +58,7 @@ def read_one(proc: "subprocess.Popen[bytes]") -> dict | None:
 
 
 def main() -> int:
-    host_binary = (
+    host_binary = os.path.abspath(
         sys.argv[1] if len(sys.argv) > 1 else ".local/bin/codex-code-mode-host"
     )
     env = dict(os.environ)
@@ -66,13 +66,16 @@ def main() -> int:
     env["LD_PRELOAD_64"] = "libumem.so"
     env["UMEM_OPTIONS"] = "backend=mmap"
 
+    scratch = tempfile.TemporaryDirectory(prefix="codex-host-smoke-")
     proc = subprocess.Popen(  # noqa: S603
         [host_binary, "--listen", "stdio"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         env=env,
+        cwd=scratch.name,
     )
+    succeeded = False
 
     def send(obj: dict) -> None:
         proc.stdin.write(encode_frame(obj))  # type: ignore[union-attr]
@@ -119,7 +122,22 @@ def main() -> int:
         log("PASS: session opened")
 
         # 3. Execute a JavaScript cell and verify its actual output.
-        js_source = 'text("illumos-v8-ok");'
+        js_source = """
+const numbers = Array.from({length: 8192}, (_, i) => 8191 - i);
+numbers.sort((a, b) => a - b);
+if (numbers[0] !== 0 || numbers[8191] !== 8191) throw Error("array sort failed");
+const bytes = new Uint8Array(1024 * 1024);
+bytes.fill(7);
+if (bytes.reduce((sum, value) => sum + value, 0) !== 7 * 1024 * 1024) {
+  throw Error("typed-array allocation failed");
+}
+const year = new Intl.DateTimeFormat("en-US", {timeZone: "UTC", year: "numeric"});
+if (year.format(new Date("2026-01-02T03:04:05Z")) !== "2026") {
+  throw Error("ICU date formatting failed");
+}
+await Promise.resolve();
+text("illumos-v8-ok");
+"""
         send(
             {
                 "type": "operation/request",
@@ -176,13 +194,12 @@ def main() -> int:
                 log(f"FAIL: unexpected JavaScript result: {result}")
                 return 1
             log(f"PASS: code-mode host executed JavaScript: {output}")
+            succeeded = True
             return 0
         log("FAIL: timed out waiting for JavaScript output")
         return 1
     except (EOFError, ValueError) as exc:
-        stderr = proc.stderr.read().decode("utf-8", "replace") if proc.stderr else ""
         log(f"FAIL: host died during V8 execution: {exc}")
-        log(f"HOST STDERR:\n{stderr}")
         return 2
     finally:
         log("DEBUG: cleaning up host process")
@@ -191,6 +208,12 @@ def main() -> int:
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             pass
+        if not succeeded and proc.poll() is not None:
+            stderr = (
+                proc.stderr.read().decode("utf-8", "replace") if proc.stderr else ""
+            )
+            log(f"HOST EXIT: {proc.returncode}\nHOST STDERR:\n{stderr}")
+        scratch.cleanup()
 
 
 if __name__ == "__main__":

@@ -16,6 +16,17 @@ architecture.
 
 ## Status
 
+The `illumos-main-native-copy` branch now follows upstream main at
+`8196bcdc18` (October 20, 2026). Main builds report `codex-cli 0.0.0`.
+The full CLI cross-build passed deployment preflight, app-server initialization,
+and a local Responses fixture with shell/file execution on OmniOS r151058.
+The fixture also passed with both shell snapshot implementations enabled.
+Fullscreen and transcript pager screens retain native terminal mouse selection;
+plain Ctrl+C remains an interrupt even while application text is selected.
+The V8 152.2.0 code-mode host also passed IPC initialization, array sorting,
+typed-array allocation, ICU formatting and promise execution on that host.
+The V8 platform patch includes the required 16-byte Solaris static TLS alignment.
+
 The `illumos-0.156.1` branch incorporates upstream commit `b412ff32c417`
 (tag `rust-v0.156.1`). On September 24, 2026, the full CLI and
 `codex-code-mode-host` cross-built successfully for `x86_64-unknown-illumos`.
@@ -57,6 +68,7 @@ been validated by this work.
 | `clangd/` | Standalone LLVM/clangd cross-build environment |
 | `config.toml` | Redacted self-hosted Responses gateway example |
 | `remote-smoke-test.sh` | Non-destructive remote deployment checks |
+| `exec-smoke.py` | Runs a shell/file round trip against a local Responses fixture |
 | `code-mode-host-smoke.py` | Runs a JavaScript cell through the host IPC protocol |
 | `CORE_FEATURE_TEST.md` | Interactive SSH TUI test matrix |
 | `PORTING_NOTES.md` | Source changes, dependency choices, and limitations |
@@ -353,27 +365,46 @@ target host before publishing a binary.
 
 ## Code mode host
 
-`codex-code-mode-host` embeds the V8 engine (the `rusty_v8` crate), which has
-no illumos/Solaris support and no prebuilt libraries for those targets. A
-native illumos build of the host is therefore not produced by this port yet.
+`codex-code-mode-host` embeds V8. Upstream does not publish illumos archives;
+this port supplies a matching archive and generated ABI bindings under `vendor/`.
+Build the host separately:
 
-The plan is to cross-build the V8 static library for `x86_64-unknown-illumos`
-once, vendor it in this repository, and feed it to the `v8` crate build script
-via the official `RUSTY_V8_ARCHIVE` override so the host builds natively on
-illumos without any external machine.
+```sh
+scripts/solaris/build-code-mode-host.sh --release
+```
 
-Until that lands, disable code mode on the target to avoid fail-closed errors
-when models request code execution:
+The script checks the workspace V8 version and both vendored checksums before
+building. When the workspace updates V8, rebuild the archive and bindings
+together; see [V8_BUILD.md](V8_BUILD.md) for the build configuration and platform
+patches. Regular host builds reuse those files and do not rebuild V8.
+
+The illumos runtime smoke test uses `libumem` with its mmap backend:
+
+```sh
+LD_PRELOAD_64=libumem.so UMEM_OPTIONS=backend=mmap \
+  python3 scripts/solaris/code-mode-host-smoke.py /path/to/codex-code-mode-host
+```
+
+Keep code mode disabled if the matching host has not been installed beside the
+CLI:
 
 ```toml
 [features]
 code_mode = false
 ```
 
-Optionally pin specific model catalog entries to `"tool_mode": "direct"` so a
-model can never request code mode regardless of the feature flag.
-
 ## Validate
+
+On the target, test a real shell/file tool round trip without model credentials:
+
+```sh
+python3 scripts/solaris/exec-smoke.py /path/to/codex
+python3 scripts/solaris/exec-smoke.py /path/to/codex --shell-snapshot
+```
+
+The fixture uses a loopback HTTP server and an isolated temporary directory. It
+explicitly bypasses the Codex sandbox to exercise the target OS execution path;
+it does not validate an OS sandbox or a real gateway.
 
 Run the automated deployment checks from the build host:
 
