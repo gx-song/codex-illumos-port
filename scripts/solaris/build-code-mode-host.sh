@@ -19,6 +19,7 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/../.." && pwd)"
+export STABLE_GIT_COMMIT="${STABLE_GIT_COMMIT:-$(git -C "${repo_root}" rev-parse HEAD)}"
 vendor_dir="${script_dir}/vendor"
 archive="${vendor_dir}/librusty_v8.a"
 binding="${vendor_dir}/src_binding_prefixed.rs"

@@ -71,6 +71,7 @@ esac
 
 target="${1:-}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+export STABLE_GIT_COMMIT="${STABLE_GIT_COMMIT:-$(git -C "${repo_root}" rev-parse HEAD)}"
 script_dir="${repo_root}/scripts/solaris"
 strip_tool=()
 cd "${repo_root}/codex-rs"

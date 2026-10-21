@@ -40,6 +40,7 @@ use std::io::IsTerminal;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use supports_color::Stream;
 
 #[cfg(all(
@@ -114,13 +115,18 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::user_input::UserInput;
 use codex_terminal_detection::TerminalName;
 
+// Use the same package identity as the TUI and app-server instead of Cargo's
+// placeholder version on main. Unpackaged builds expose the stamped commit.
+static CLI_VERSION: LazyLock<String> =
+    LazyLock::new(|| codex_build_info::BuildInfo::get().to_string());
+
 /// Codex CLI
 ///
 /// If no subcommand is specified, options will be forwarded to the interactive CLI.
 #[derive(Debug, Parser)]
 #[clap(
     author,
-    version,
+    version = CLI_VERSION.as_str(),
     // If a sub‑command is given, ignore requirements of the default args.
     subcommand_negates_reqs = true,
     // The executable is sometimes invoked via a platform‑specific name like

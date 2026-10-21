@@ -98,14 +98,16 @@ that userspace. If publishing it separately:
 - include the repository `LICENSE`, applicable notices, a modified-source link,
   and a third-party license report or SBOM
 
-The release *tag* carries the port provenance, for example
-`v0.155.0-illumos.<port-commit>`. The binary itself reports the plain upstream
-version: `codex --version` prints `codex-cli 0.155.0`, because the version comes
-from `CARGO_PKG_VERSION` and the build adds no `+illumos.<port-commit>` build
-metadata. Record the port commit in the release notes and in the status table in
-`README.md` instead of encoding it in the version string; a
-`CODEX_EXPECTED_VERSION` containing `+illumos.<port-commit>` will fail the
-remote smoke test.
+Package the multipurpose CLI with a `codex-package.json` next to `bin/`, and
+set its `version` to the release's SemVer identity. The CLI, TUI header, and
+app-server read this identity from the package manifest. For a build from
+upstream main, use an explicit custom version such as
+`2026.10.21-illumos.native-copy+g<port-commit>` instead of claiming an official
+stable release. Record the full source and upstream commits in the build
+metadata as well. Both build scripts stamp `STABLE_GIT_COMMIT` from Git unless
+it is explicitly provided; without a package manifest, the CLI reports that
+commit. Set `CODEX_EXPECTED_VERSION` to the actual `codex-cli <version>` output
+when running the remote smoke test.
 
 Publish through the manual port release process documented here. Do not use the
 upstream `rust-release.yml` workflow or `scripts/install/install.sh`; their
