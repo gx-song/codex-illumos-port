@@ -43,7 +43,7 @@ pub struct StartupConfigArgs {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct StartupConfig {
-    app_server_version: &'static str,
+    app_server_version: String,
     config_requirements: ConfigRequirementsReadResponse,
 }
 
@@ -167,7 +167,7 @@ async fn read_startup_config(
     );
     let requirements = config.config_layer_stack.requirements_toml();
     Ok(StartupConfig {
-        app_server_version: env!("CARGO_PKG_VERSION"),
+        app_server_version: codex_build_info::BuildInfo::get().to_string(),
         config_requirements: ConfigRequirementsReadResponse {
             supports_independent_speed_modes: Some(true),
             requirements: map_requirements_to_api(
