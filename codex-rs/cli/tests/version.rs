@@ -83,6 +83,12 @@ fn unpackaged_version_uses_build_identity() -> anyhow::Result<()> {
         .trim_end()
         .strip_prefix("codex-cli ")
         .expect("CLI version prefix");
+    if cfg!(any(target_os = "illumos", target_os = "solaris"))
+        && env!("CARGO_PKG_VERSION") != "0.0.0"
+    {
+        assert_eq!(identity, env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
     assert!(
         identity == "dev"
             || (identity.len() == 40 && identity.bytes().all(|byte| byte.is_ascii_hexdigit())),

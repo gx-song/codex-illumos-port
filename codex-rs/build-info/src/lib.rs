@@ -114,8 +114,15 @@ impl BuildInfo {
             };
         }
 
+        // illumos also ships the CLI as a standalone executable. Release tags
+        // carry their version in Cargo; main uses 0.0.0 and retains its Git identity.
+        #[cfg(any(target_os = "illumos", target_os = "solaris"))]
+        let version = Version::parse(env!("CARGO_PKG_VERSION")).expect("valid Cargo version");
+        #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
+        let version = Version::new(0, 0, 0);
+
         Self {
-            version: Version::new(0, 0, 0),
+            version,
             build_commit: build_commit.to_owned(),
             target: Some(env!("CODEX_BUILD_TARGET").to_owned()),
         }

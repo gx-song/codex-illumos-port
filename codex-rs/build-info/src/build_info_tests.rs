@@ -10,6 +10,14 @@ use crate::build_id;
 
 const BUILD_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 
+fn expected_standalone_version() -> Version {
+    if cfg!(any(target_os = "illumos", target_os = "solaris")) {
+        Version::parse(env!("CARGO_PKG_VERSION")).expect("valid package version")
+    } else {
+        Version::new(0, 0, 0)
+    }
+}
+
 /// A packaged runtime takes its release identity from its package manifest.
 #[test]
 fn packaged_runtime_uses_manifest_version() {
@@ -52,7 +60,7 @@ fn unpackaged_runtime_uses_build_commit() {
     assert_eq!(
         BuildInfo::resolve(&context, BUILD_COMMIT),
         BuildInfo {
-            version: Version::new(0, 0, 0),
+            version: expected_standalone_version(),
             build_commit: BUILD_COMMIT.to_string(),
             target: Some(env!("CODEX_BUILD_TARGET").to_string()),
         },
@@ -79,7 +87,7 @@ fn legacy_package_without_version_uses_build_commit() {
     assert_eq!(
         BuildInfo::resolve(&context, BUILD_COMMIT),
         BuildInfo {
-            version: Version::new(0, 0, 0),
+            version: expected_standalone_version(),
             build_commit: BUILD_COMMIT.to_string(),
             target: Some(env!("CODEX_BUILD_TARGET").to_string()),
         },
@@ -109,7 +117,7 @@ fn invalid_package_version_uses_build_commit() {
     assert_eq!(
         BuildInfo::resolve(&context, BUILD_COMMIT),
         BuildInfo {
-            version: Version::new(0, 0, 0),
+            version: expected_standalone_version(),
             build_commit: BUILD_COMMIT.to_string(),
             target: Some(env!("CODEX_BUILD_TARGET").to_string()),
         },
