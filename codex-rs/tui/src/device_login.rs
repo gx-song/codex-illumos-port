@@ -17,6 +17,12 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadStatus;
 use std::io;
 
+#[cfg(any(target_os = "illumos", target_os = "solaris"))]
+pub(crate) async fn prefer_device_login() -> bool {
+    true
+}
+
+#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
 pub(crate) async fn prefer_device_login() -> bool {
     if crate::clipboard_copy::is_ssh_session()
         || cfg!(target_os = "linux")

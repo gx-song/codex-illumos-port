@@ -180,7 +180,7 @@ impl AuthModeWidget {
             drop(state);
             self.request_frame.schedule_frame();
             tokio::task::spawn_blocking(move || {
-                let _ = webbrowser::open(&auth_url);
+                let _ = super::auth::open_auth_url(&auth_url);
             });
         }
     }

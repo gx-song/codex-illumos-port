@@ -1329,14 +1329,14 @@ fn show_chatgpt_login_in_browser(
 }
 
 #[cfg(any(target_os = "illumos", target_os = "solaris"))]
-fn open_auth_url(_url: &str) -> std::io::Result<()> {
+pub(super) fn open_auth_url(_url: &str) -> std::io::Result<()> {
     Err(std::io::Error::other(
         "browser launching is unsupported on illumos and Solaris",
     ))
 }
 
 #[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
-fn open_auth_url(url: &str) -> std::io::Result<()> {
+pub(super) fn open_auth_url(url: &str) -> std::io::Result<()> {
     webbrowser::open(url)
 }
 
