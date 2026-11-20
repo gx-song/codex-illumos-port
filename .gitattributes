@@ -1,5 +1,6 @@
 codex-rs/app-server-protocol/schema/** linguist-generated
 codex-rs/hooks/schema/generated/** linguist-generated
+codex-rs/skills/src/assets/samples/create-statusline/references/statusline.d.ts linguist-generated
 third_party/voice/sources.json text eol=lf
 scripts/solaris/vendor/librusty_v8.a filter=lfs diff=lfs merge=lfs -text
 patches/v8_array_sort_elements_kind.patch text eol=lf

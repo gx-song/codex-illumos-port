@@ -1,12 +1,13 @@
 //! Reusable provider catalog caches and Cloud resource contents.
 //! Provider catalogs remain unfiltered until step preparation applies policy.
+//! Cloud discovery publishes only into its current auth and resource generation.
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::Mutex;
 
+use codex_exec_server::EnvironmentAccessKey;
 use codex_exec_server::ExecutorCapabilityDiscoverySnapshot;
-use codex_exec_server::ResolvedSelectedCapabilityRoot;
+use codex_extension_api::CatalogRefreshBackoff;
 use codex_mcp::McpResourceClient;
 use codex_mcp::McpResourceClientAuthKey;
 use codex_mcp::McpResourceServerCacheKey;
@@ -32,18 +33,47 @@ pub(crate) struct SkillCatalogState {
     // DiscoveryV2.
     pub(crate) executor_v2_cache: Option<CachedExecutorV2Catalog>,
     // Shared by both discovery modes.
-    pub(crate) cloud_cache: Option<Arc<CloudSkillGeneration>>,
+    pub(crate) cloud_generation: Option<Arc<CloudSkillGeneration>>,
+    pub(crate) cloud_retry: Option<CatalogRefreshBackoff>,
+    pub(crate) cloud_resources: CloudResourceCache,
 }
 
-/// Keeps cloud metadata and contents within one published auth scope and Apps availability state.
-/// Warning-free discovery is reused until the Apps resource generation changes.
+impl SkillCatalogState {
+    /// Reuses the auth scope or replaces it, clearing contents from the previous scope.
+    pub(crate) fn prepare_cloud_generation(
+        &mut self,
+        mcp_resources: Option<&McpResourceClient>,
+    ) -> Arc<CloudSkillGeneration> {
+        let auth_cache_key = mcp_resources
+            .map(|client| client.auth_cache_key_for_server(codex_mcp::CODEX_APPS_MCP_SERVER_NAME));
+        if let Some(generation) = self
+            .cloud_generation
+            .as_ref()
+            .filter(|generation| generation.auth_cache_key == auth_cache_key)
+        {
+            return Arc::clone(generation);
+        }
+
+        let generation = Arc::new(CloudSkillGeneration {
+            auth_cache_key,
+            resource_cache_key: None,
+            mcp_resources: mcp_resources.cloned(),
+            catalog: None,
+        });
+        self.cloud_generation = Some(Arc::clone(&generation));
+        self.cloud_resources = CloudResourceCache::default();
+        generation
+    }
+}
+
+/// Keeps cloud metadata within one published auth scope and Apps availability state.
+/// Accepted discovery, including partial catalogs, is reused until auth or resources change.
 /// A published refresh replaces the Arc so late reads cannot populate its successor.
 pub(crate) struct CloudSkillGeneration {
     pub(crate) auth_cache_key: Option<McpResourceClientAuthKey>,
     pub(crate) resource_cache_key: Option<McpResourceServerCacheKey>,
     pub(crate) mcp_resources: Option<McpResourceClient>,
     pub(crate) catalog: Option<SkillCatalog>,
-    pub(crate) resources: Mutex<CloudResourceCache>,
 }
 
 impl CloudSkillGeneration {
@@ -53,7 +83,7 @@ impl CloudSkillGeneration {
             .and_then(|client| client.server_cache_key(codex_mcp::CODEX_APPS_MCP_SERVER_NAME))
     }
 
-    pub(crate) fn is_current(&self) -> bool {
+    pub(crate) fn is_auth_current(&self) -> bool {
         self.auth_cache_key
             == self.mcp_resources.as_ref().map(|client| {
                 client.auth_cache_key_for_server(codex_mcp::CODEX_APPS_MCP_SERVER_NAME)
@@ -78,7 +108,7 @@ pub(crate) struct CachedExecutorV2Catalog {
 }
 
 impl CachedExecutorV2Catalog {
-    pub(crate) fn matches(
+    pub(crate) fn same_discovery(
         &self,
         snapshots: &[codex_exec_server::ExecutorCapabilityDiscoveryV2Snapshot],
     ) -> bool {
@@ -87,34 +117,29 @@ impl CachedExecutorV2Catalog {
                 .snapshots
                 .iter()
                 .zip(snapshots)
-                .all(|(previous, current)| {
-                    current.result.is_ok() && previous.same_discovery(current)
-                })
+                .all(|(previous, current)| previous.same_discovery(current))
     }
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct ExecutorCatalogCacheKey {
-    pub(crate) turn_id: String,
-    pub(crate) resolved_roots: Vec<ResolvedSelectedCapabilityRoot>,
+    pub(crate) turn_id: Option<String>,
+    pub(crate) roots: Vec<(SelectedCapabilityRoot, EnvironmentAccessKey)>,
     pub(crate) include_bundled_skills: bool,
 }
 
 impl ExecutorCatalogCacheKey {
-    pub(crate) fn matches(&self, query: &crate::provider::SkillListQuery) -> bool {
+    pub(crate) fn matches(&self, query: &crate::provider::SkillListQuery<'_>) -> bool {
         self.turn_id == query.turn_id
-            && self
-                .resolved_roots
-                .iter()
-                .map(ResolvedSelectedCapabilityRoot::selected_root)
-                .eq(query.executor_roots.iter())
             && self.include_bundled_skills == query.include_bundled_skills
-            // Unbound callers cannot establish identity for a cached filesystem catalog.
-            && query.resolved_executor_roots.len() == query.executor_roots.len()
-            && self.resolved_roots.iter().zip(&query.resolved_executor_roots).all(|(previous, current)| {
-                previous.selected_root() == current.selected_root()
-                    && Arc::ptr_eq(previous.environment(), current.environment())
-            })
+            && self.roots.len() == query.executor_roots.len()
+            && self
+                .roots
+                .iter()
+                .zip(&query.executor_roots)
+                .all(|((root, access), current)| {
+                    root == current.root && *access == current.fs.cache_key()
+                })
     }
 }
 
@@ -127,7 +152,6 @@ pub(crate) struct CachedExecutorCatalog {
 /// Keeps the latest result; only successful results for unchanged inputs can be reused.
 #[derive(Clone, Debug)]
 pub(crate) struct CachedExecutorDiscoveryCatalog {
-    pub(crate) roots: Vec<SelectedCapabilityRoot>,
     pub(crate) discovery: ExecutorCapabilityDiscoverySnapshot,
     pub(crate) include_bundled_skills: bool,
     pub(crate) catalog: SkillCatalog,
@@ -136,13 +160,11 @@ pub(crate) struct CachedExecutorDiscoveryCatalog {
 impl CachedExecutorDiscoveryCatalog {
     pub(crate) fn matches(
         &self,
-        roots: &[SelectedCapabilityRoot],
         discovery: Option<&ExecutorCapabilityDiscoverySnapshot>,
         include_bundled_skills: bool,
     ) -> bool {
         discovery.is_some_and(|discovery| {
-            self.roots == roots
-                && self.include_bundled_skills == include_bundled_skills
+            self.include_bundled_skills == include_bundled_skills
                 && self.discovery.sandbox_contexts() == discovery.sandbox_contexts()
                 && self.discovery.roots().len() == discovery.roots().len()
                 && self.discovery.roots().iter().zip(discovery.roots()).all(
@@ -150,7 +172,8 @@ impl CachedExecutorDiscoveryCatalog {
                         previous.selected_root == current.selected_root
                             && match (&previous.result, &current.result) {
                                 (Ok(previous), Ok(current)) => Arc::ptr_eq(previous, current),
-                                _ => false,
+                                (Err(previous), Err(current)) => previous == current,
+                                (Ok(_), Err(_)) | (Err(_), Ok(_)) => false,
                             }
                     },
                 )

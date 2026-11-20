@@ -8,6 +8,8 @@ mod tls_proxy;
 #[path = "exec_process/windows_sandbox.rs"]
 mod windows_sandbox;
 
+#[cfg(unix)]
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -35,11 +37,8 @@ use codex_exec_server::StartedExecProcess;
 #[cfg(any(unix, windows))]
 use codex_exec_server::WindowsSandboxSelection;
 use codex_exec_server::WriteStatus;
-#[cfg(unix)]
 use codex_network_proxy::NetworkProxyConfig;
-#[cfg(unix)]
 use codex_network_proxy::RemoteNetworkProxyConfig;
-#[cfg(unix)]
 use codex_network_proxy::RemoteNetworkProxyLaunchConfig;
 #[cfg(unix)]
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
@@ -57,7 +56,6 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 #[cfg(unix)]
 use codex_protocol::permissions::NetworkSandboxPolicy;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -522,7 +520,14 @@ async fn shell_snapshot_v2_remote_managed_proxy_uses_prepared_execution_context(
     const API_KEY: &str = "sk-proj-executor-only-0000000000000000000000000000000000";
     const PROFILE_GH_TOKEN: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const REQUEST_GH_TOKEN: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const VENDOR_TOKEN: &str = "vendor_abcdefgh";
     const CUSTOM_HOST: &str = "chatgpt.com";
+    // Sanitizing the 256 profile aliases can take longer on emulated executors.
+    let startup_timeout = match credential_startup {
+        CredentialStartup::Profile => Duration::from_secs(90),
+        _ => Duration::from_secs(30),
+    };
+    let configured_provider = shell_name == "bash" && shell_args.first() == Some(&"-c");
     let shell_path = format!("/bin/{shell_name}");
     if shell_name == "zsh" && !std::path::Path::new(&shell_path).exists() {
         eprintln!("skipping zsh test: {shell_path} is unavailable");
@@ -553,6 +558,12 @@ async fn shell_snapshot_v2_remote_managed_proxy_uses_prepared_execution_context(
         })
         .transpose()?;
     let mut executor_env = vec![("OPENAI_API_KEY", API_KEY.to_string())];
+    if configured_provider {
+        executor_env.extend([
+            ("VENDOR_TOKEN", VENDOR_TOKEN.to_string()),
+            ("VENDOR_BASE_URL", "https://api.openai.com/v1".to_string()),
+        ]);
+    }
     if let Some(upstream) = &upstream {
         let ca_path = home.path().join("upstream-ca.pem");
         std::fs::write(&ca_path, &upstream.ca_cert_pem)?;
@@ -681,6 +692,11 @@ async fn shell_snapshot_v2_remote_managed_proxy_uses_prepared_execution_context(
             .include_only
             .extend(["GH_TOKEN", "GH_ALIAS", "AUTH_SIZE_*"].map(str::to_string));
     }
+    if configured_provider {
+        policy
+            .include_only
+            .extend(["VENDOR_TOKEN", "VENDOR_BASE_URL"].map(str::to_string));
+    }
     let mut proxy_settings = NetworkProxyConfig {
         enabled: true,
         ..NetworkProxyConfig::default()
@@ -691,7 +707,23 @@ async fn shell_snapshot_v2_remote_managed_proxy_uses_prepared_execution_context(
     }
     proxy_settings.set_allowed_domains(allowed_domains);
     let mut proxy_config = RemoteNetworkProxyConfig::from_effective_config(&proxy_settings)?;
-    proxy_config.credential_masking = credential_masking;
+    let mut providers = BTreeMap::new();
+    if configured_provider {
+        providers.insert(
+            "vendor".to_string(),
+            codex_network_proxy::CredentialProviderConfig {
+                env: vec!["VENDOR_TOKEN".to_string()],
+                patterns: vec!["vendor_[a-z]{8}".to_string()],
+                url_prefix_from_env: Some("VENDOR_BASE_URL".to_string()),
+                auth: vec![codex_network_proxy::CredentialAuthMethod::Header],
+                header: Some("X-Vendor-Token".to_string()),
+                ..Default::default()
+            },
+        );
+    }
+    if credential_masking {
+        proxy_config.enable_credential_masking(providers);
+    }
     let mut saved_api_key = None;
 
     for (attempt, &shell_args) in shell_args.iter().enumerate() {
@@ -741,8 +773,13 @@ async fn shell_snapshot_v2_remote_managed_proxy_uses_prepared_execution_context(
             command
         };
         let command = if credential_masking {
+            let vendor_header = if configured_provider {
+                "--header \"X-Vendor-Token: $(<\"$HOME/vendor-token\")\""
+            } else {
+                ""
+            };
             format!(
-                "{command}; test \"$GH_ENTERPRISE_TOKEN\" = executor-unbound-enterprise-token || exit 45; test \"$AUTH_ALIAS\" = \"Bearer $OPENAI_API_KEY\" || exit 42; printf '|%s' \"$OPENAI_API_KEY\"; curl --silent --show-error --fail --max-time 5 --noproxy '' --config \"$HOME/curl.conf\" \"${{OPENAI_BASE_URL:-https://api.openai.com/v1}}/models\" >/dev/null"
+                "{command}; test \"$GH_ENTERPRISE_TOKEN\" = executor-unbound-enterprise-token || exit 45; test \"$AUTH_ALIAS\" = \"Bearer $OPENAI_API_KEY\" || exit 42; printf '|%s' \"$OPENAI_API_KEY\"; curl --silent --show-error --fail --max-time 5 --noproxy '' --config \"$HOME/curl.conf\" {vendor_header} \"${{OPENAI_BASE_URL:-https://api.openai.com/v1}}/models\" >/dev/null"
             )
         } else {
             format!("{command}; test \"$OPENAI_API_KEY\" = '{API_KEY}' || exit 46")
@@ -761,8 +798,13 @@ async fn shell_snapshot_v2_remote_managed_proxy_uses_prepared_execution_context(
         } else {
             command
         };
+        let command = if configured_provider && attempt == 0 {
+            format!("printf '%s' \"$VENDOR_TOKEN\" > \"$HOME/vendor-token\"; {command}")
+        } else {
+            command
+        };
         let started = timeout(
-            Duration::from_secs(30),
+            startup_timeout,
             backend.start(ExecParams {
                 metadata: Default::default(),
                 process_id: ProcessId::from(format!("managed-snapshot-{attempt}")),
@@ -796,7 +838,8 @@ async fn shell_snapshot_v2_remote_managed_proxy_uses_prepared_execution_context(
                 ),
             }),
         )
-        .await??;
+        .await
+        .context("timed out starting shell snapshot process")??;
         let (stdout, stderr, status, closed) =
             collect_process_output_from_events(started.process).await?;
         let expected_stderr = if expect_snapshot_fallback {
@@ -821,7 +864,7 @@ async fn shell_snapshot_v2_remote_managed_proxy_uses_prepared_execution_context(
                 .split_once('|')
                 .context("command should expose the child API key")?;
             if expect_masking {
-                assert!(child_api_key.starts_with("sk-proj-"));
+                assert!(child_api_key.starts_with("sk-proj-masked"));
                 assert_ne!(child_api_key, API_KEY);
                 assert!(!stdout.contains(API_KEY));
             } else {
@@ -833,6 +876,16 @@ async fn shell_snapshot_v2_remote_managed_proxy_uses_prepared_execution_context(
                 format!("header = \"Authorization: Bearer {saved_api_key}\"\n")
             );
             let request = upstream.next_request()?;
+            if configured_provider {
+                let placeholder = std::fs::read_to_string(home.path().join("vendor-token"))?;
+                assert!(placeholder.starts_with("vendor_"));
+                assert_eq!(placeholder.len(), VENDOR_TOKEN.len());
+                assert_ne!(placeholder, VENDOR_TOKEN);
+                assert_eq!(
+                    request.headers.get("x-vendor-token"),
+                    Some(&vec![VENDOR_TOKEN.to_string()])
+                );
+            }
             assert_eq!(
                 (
                     request.connect_authority.as_str(),
@@ -1222,9 +1275,9 @@ async fn assert_exec_process_starts_and_exits(use_remote: bool) -> Result<()> {
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_process_keeps_sandbox_helper_visible_with_restricted_reads() -> Result<()> {
+async fn remote_process_can_read_its_helper_and_generated_ca_with_restricted_reads() -> Result<()> {
     if let Some(warning) = codex_sandboxing::system_bwrap_warning(
         &PermissionProfile::read_only(),
         &std::env::current_dir()?,
@@ -1233,10 +1286,24 @@ async fn remote_process_keeps_sandbox_helper_visible_with_restricted_reads() -> 
         return Ok(());
     }
 
-    let context = create_process_context(/*use_remote*/ true).await?;
+    let server = exec_server().await?;
+    let environment = Environment::create_for_tests(Some(server.websocket_url().to_string()))?;
+    let proxy_dir = server.codex_home().canonicalize()?.join("proxy");
+    std::fs::create_dir_all(&proxy_dir)?;
+    // The bundle name contains the SHA-256 of its contents.
+    let bundle = proxy_dir
+        .join("ca-bundle-ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad.pem");
+    std::fs::write(&bundle, b"abc")?;
+    let untrusted = proxy_dir.join("untrusted.pem");
+    std::fs::write(&untrusted, b"untrusted")?;
     let workspace = TempDir::new()?;
     let file = workspace.path().join("allowed.txt");
     std::fs::write(&file, b"allowed")?;
+    // Capture Bash startup with the controller's default in the environment, then replay the override.
+    std::fs::write(
+        workspace.path().join(".bashrc"),
+        "export DENO_CERT=profile.pem\n",
+    )?;
     let cwd = PathUri::from_host_native_path(workspace.path())?;
     let policy = FileSystemSandboxPolicy::restricted(vec![
         FileSystemSandboxEntry {
@@ -1259,22 +1326,35 @@ async fn remote_process_keeps_sandbox_helper_visible_with_restricted_reads() -> 
         cwd.clone(),
     );
 
-    let session = context
-        .backend
+    let session = environment
+        .get_exec_backend()
         .start(ExecParams {
             metadata: Default::default(),
             process_id: ProcessId::from("proc-restricted-helper"),
-            argv: vec!["/bin/cat".to_string(), file.to_string_lossy().into_owned()],
+            argv: vec![
+                "/bin/bash".to_owned(), "-lc".to_owned(),
+                r#"test "$DENO_CERT" = profile.pem && cat "$1" "$CURL_CA_BUNDLE" && ! cat "$SSL_CERT_FILE" 2>/dev/null"#.to_owned(),
+                "bash".to_owned(), file.to_string_lossy().into_owned(),
+            ],
             cwd,
-            shell_snapshot: None,
+            shell_snapshot: Some(ShellSnapshotRequest {
+                scope_id: "restricted-ca".to_string(),
+                shell: ShellInfo { name: "bash".to_string(), path: "/bin/bash".to_string() },
+            }),
             env_policy: /*env_policy*/ None,
-            env: HashMap::from([("PATH".to_string(), std::env::var("PATH")?)]),
+            env: HashMap::from([
+                ("PATH".to_owned(), std::env::var("PATH")?),
+                ("HOME".to_owned(), workspace.path().display().to_string()),
+                ("DENO_CERT".to_owned(), bundle.to_string_lossy().into_owned()),
+                ("CURL_CA_BUNDLE".to_owned(), bundle.to_string_lossy().into_owned()),
+                ("SSL_CERT_FILE".to_owned(), untrusted.to_string_lossy().into_owned()),
+            ]),
             tty: false,
             pipe_stdin: false,
             arg0: None,
             sandbox: Some(sandbox),
             enforce_managed_network: false,
-            managed_network: None,
+            managed_network: Some(codex_network_proxy::ManagedNetworkSandboxContext::default()),
             network_proxy: None,
         })
         .await?;
@@ -1282,7 +1362,7 @@ async fn remote_process_keeps_sandbox_helper_visible_with_restricted_reads() -> 
 
     assert_eq!(
         output,
-        ("allowed".to_string(), String::new(), Some(0), true)
+        ("allowedabc".to_string(), String::new(), Some(0), true)
     );
     Ok(())
 }
@@ -1683,6 +1763,11 @@ async fn assert_exec_process_retains_output_after_exit_until_streams_close(
     let (helper_binary, _) = current_test_binary_helper_paths()?;
     let release_dir = TempDir::new()?;
     let release_path = release_dir.path().join("release-delayed-output");
+    let proxy_path = release_dir.path().join("proxy-url");
+    let proxy = RemoteNetworkProxyConfig::from_effective_config(&NetworkProxyConfig {
+        enabled: true,
+        ..Default::default()
+    })?;
     let process_id = "proc-output-after-exit".to_string();
     let session = context
         .backend
@@ -1690,6 +1775,10 @@ async fn assert_exec_process_retains_output_after_exit_until_streams_close(
             metadata: Default::default(),
             process_id: process_id.clone().into(),
             argv: vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                r#"printf %s "$HTTP_PROXY" > "$0" && exec "$@""#.to_string(),
+                proxy_path.to_string_lossy().into_owned(),
                 helper_binary.to_string_lossy().into_owned(),
                 DELAYED_OUTPUT_AFTER_EXIT_PARENT_ARG.to_string(),
                 release_path.to_string_lossy().into_owned(),
@@ -1704,7 +1793,7 @@ async fn assert_exec_process_retains_output_after_exit_until_streams_close(
             sandbox: None,
             enforce_managed_network: false,
             managed_network: None,
-            network_proxy: None,
+            network_proxy: Some(RemoteNetworkProxyLaunchConfig::new(proxy)),
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
@@ -1726,6 +1815,13 @@ async fn assert_exec_process_retains_output_after_exit_until_streams_close(
     );
     assert_eq!(exit_response.exit_code, Some(0));
     assert!(!exit_response.closed);
+    let proxy_url = std::fs::read_to_string(proxy_path)?;
+    let proxy_addr = proxy_url
+        .strip_prefix("http://")
+        .context("child HTTP proxy")?;
+    tokio::net::TcpStream::connect(proxy_addr)
+        .await
+        .context("the child's proxy should stay live while its descendant holds stdout")?;
     let exit_seq = exit_response
         .next_seq
         .checked_sub(1)
@@ -1853,10 +1949,10 @@ async fn assert_remote_windows_sandbox_process_write(
     let workspace = TempDir::new()?;
     let blocked_file = workspace.path().join("blocked.txt");
     let cwd = PathUri::from_host_native_path(workspace.path())?;
-    let mut sandbox = FileSystemSandboxContext::from_legacy_sandbox_policy(
-        SandboxPolicy::new_read_only_policy(),
+    let mut sandbox = FileSystemSandboxContext::from_permission_profile(
+        codex_protocol::models::PermissionProfile::read_only(),
         cwd.clone(),
-    )?;
+    );
     match expected_sandbox_type {
         codex_sandboxing::SandboxType::WindowsRestrictedToken => {
             sandbox.windows_sandbox_selection = WindowsSandboxSelection::RestrictedToken;

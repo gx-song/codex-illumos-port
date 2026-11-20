@@ -26,7 +26,6 @@ use unicode_width::UnicodeWidthStr;
 use super::ChatComposer;
 use super::FooterMode;
 use super::InputResult;
-use super::draft_state::PromptPrefix;
 use crate::bottom_pane::BottomPane;
 use crate::terminal_palette::StdoutColorLevel;
 use crate::terminal_palette::default_fg;
@@ -178,7 +177,7 @@ impl ChatComposer {
         if self.history_search.is_some()
             || (Self::is_history_search_key(&key, &self.history_search_previous_keys)
                 && (self.popups.active() || !self.draft.textarea.wants_vim_search_key(key))
-                && !self.wants_vim_history_key(key))
+                && !self.wants_edit_history_key(key))
             || self.empty_prompt_shortcut_toggle(&key).is_some()
         {
             return None;
@@ -316,9 +315,7 @@ impl ChatComposer {
         let Some(body) = text.strip_prefix('/') else {
             return false;
         };
-        if !self.slash_commands_enabled()
-            || self.draft.prompt_prefix == PromptPrefix::Shell
-            || text.contains(['\n', '\r'])
+        if !self.slash_commands_enabled() || self.draft.is_bash_mode || text.contains(['\n', '\r'])
         {
             return false;
         }
@@ -382,7 +379,7 @@ impl ChatComposer {
             || self.is_task_running
             || self.voice_strip.is_some()
             || self.popup_active()
-            || self.footer_mode() == FooterMode::ShortcutOverlay
+            || matches!(self.footer_mode(), FooterMode::ShortcutOverlay(_))
             || area.height < 3
             || textarea.is_empty()
             || effective_stdout_color_level() != StdoutColorLevel::TrueColor
