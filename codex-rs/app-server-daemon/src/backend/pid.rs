@@ -23,7 +23,7 @@ use serde::Serialize;
 use tokio::fs;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncSeekExt;
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "illumos")))]
 use tokio::process::Command;
 use tokio::time::sleep;
 
@@ -623,6 +623,11 @@ async fn process_matches_record(record: &PidRecord) -> Result<bool> {
         let (state, start_time) = read_process_details(record.pid).await?;
         let matches = start_time == record.process_start_time;
         let is_zombie = state.starts_with('Z');
+        // illumos procfs supplies a locale-independent, nanosecond creation time.
+        #[cfg(target_os = "illumos")]
+        if record.process_start_time.starts_with("pr_create:") {
+            return Ok((is_zombie, matches));
+        }
         if !matches && !is_zombie {
             bail!(
                 "cannot verify pid-managed process {}: legacy start time changed; PID record retained. \
@@ -814,7 +819,24 @@ async fn read_process_start_time(pid: u32) -> Result<String> {
     Ok(read_process_details(pid).await?.1)
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "illumos")]
+async fn read_process_details(pid: u32) -> Result<(String, String)> {
+    // The LP64 prusage_t prefix in <sys/procfs.h> is two 32-bit fields
+    // followed by pr_tstamp, pr_create and pr_term (timestruc_t pairs).
+    // Unlike psinfo.pr_start, pr_create survives the transition to a zombie.
+    let mut usage = fs::File::open(format!("/proc/{pid}/usage"))
+        .await
+        .with_context(|| format!("failed to open process usage for pid {pid}"))?;
+    let mut prefix = [0u8; 56];
+    usage.read_exact(&mut prefix).await?;
+    let seconds = i64::from_ne_bytes(prefix[24..32].try_into()?);
+    let nanos = i64::from_ne_bytes(prefix[32..40].try_into()?);
+    let terminated = prefix[40..56].iter().any(|byte| *byte != 0);
+    let state = if terminated { "Z" } else { "live" };
+    Ok((state.to_owned(), format!("pr_create:{seconds}.{nanos:09}")))
+}
+
+#[cfg(all(unix, not(target_os = "illumos")))]
 async fn read_process_details(pid: u32) -> Result<(String, String)> {
     let output = Command::new("ps")
         .args(["-p", &pid.to_string(), "-o", "stat=", "-o", "lstart="])
